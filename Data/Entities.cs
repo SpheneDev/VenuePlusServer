@@ -12,10 +12,10 @@ public sealed class VipEntryEntity
     [MaxLength(64)]
     public string ClubId { get; set; } = string.Empty;
     [Required]
-    [MaxLength(128)]
+    [MaxLength(256)]
     public string CharacterName { get; set; } = string.Empty;
     [Required]
-    [MaxLength(128)]
+    [MaxLength(256)]
     public string HomeWorld { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? ExpiresAt { get; set; }
@@ -72,7 +72,7 @@ public sealed class ClubEntity
     [MaxLength(64)]
     public string ClubId { get; set; } = string.Empty;
     [Required]
-    [MaxLength(64)]
+    [MaxLength(256)]
     public string CreatedByUsername { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     [MaxLength(64)]
@@ -89,7 +89,7 @@ public sealed class BaseUserEntity
     [MaxLength(15)]
     public string Uid { get; set; } = string.Empty;
     [Required]
-    [MaxLength(64)]
+    [MaxLength(256)]
     public string Username { get; set; } = string.Empty;
     [Required]
     [MaxLength(256)]

@@ -60,6 +60,7 @@ public class Program
             if (npg.ConnectionPruningInterval <= 0) npg.ConnectionPruningInterval = 30;
             conn = npg.ConnectionString;
             builder.Services.AddDbContext<VenuePlusDbContext>(o => o.UseNpgsql(conn, npgsql => npgsql.EnableRetryOnFailure(5, TimeSpan.FromSeconds(2), null)));
+            builder.Services.AddSingleton<EncryptionService>();
             builder.Services.AddScoped<EfStore>();
         }
         if (!string.IsNullOrWhiteSpace(pepperConf) && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("VENUEPLUS_PASSWORD_PEPPER")))
@@ -77,9 +78,13 @@ public class Program
             var db = scope.ServiceProvider.GetRequiredService<VenuePlusDbContext>();
             try { db.Database.Migrate(); }
             catch (Exception ex) { app.Logger.LogDebug($"DB migrate failed: {ex.Message}"); db.Database.EnsureCreated(); }
+            try { await EnsureColumnSizesAsync(conn); }
+            catch (Exception ex) { app.Logger.LogDebug($"DB schema adjust failed: {ex.Message}"); }
             var defaultClub = "default";
             var efSvcInit = scope.ServiceProvider.GetRequiredService<EfStore>();
             await efSvcInit.EnsureDefaultsAsync(defaultClub, defaultPassConf);
+            try { await efSvcInit.UpgradeEncryptionAsync(); }
+            catch (Exception ex) { app.Logger.LogDebug($"Data encryption upgrade failed: {ex.Message}"); }
             var jobs = await efSvcInit.GetJobRightsAsync(defaultClub);
             if (jobs.Count > 0)
             {
@@ -128,5 +133,22 @@ public class Program
                 };
             }
         }
+    }
+
+    private static async System.Threading.Tasks.Task EnsureColumnSizesAsync(string connectionString)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString)) return;
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        async System.Threading.Tasks.Task AlterAsync(string table, string column)
+        {
+            var cmd = conn.CreateCommand();
+            cmd.CommandText = $"ALTER TABLE \"{table}\" ALTER COLUMN \"{column}\" TYPE VARCHAR(256)";
+            await cmd.ExecuteNonQueryAsync();
+        }
+        try { await AlterAsync("BaseUsers", "Username"); } catch { }
+        try { await AlterAsync("VipEntries", "CharacterName"); } catch { }
+        try { await AlterAsync("VipEntries", "HomeWorld"); } catch { }
+        try { await AlterAsync("Clubs", "CreatedByUsername"); } catch { }
     }
 }

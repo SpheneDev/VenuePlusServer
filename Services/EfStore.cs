@@ -11,10 +11,12 @@ namespace VenuePlus.Server.Services;
 public sealed class EfStore
 {
     private readonly VenuePlusDbContext _db;
+    private readonly EncryptionService _crypto;
 
-    public EfStore(VenuePlusDbContext db)
+    public EfStore(VenuePlusDbContext db, EncryptionService crypto)
     {
         _db = db;
+        _crypto = crypto;
     }
 
     public async Task EnsureDefaultsAsync(string clubId, string? defaultStaffPass)
@@ -55,15 +57,15 @@ public sealed class EfStore
 
     public async Task<VipEntry[]> LoadVipEntriesAsync(string clubId)
     {
-        var list = await _db.VipEntries.Where(e => e.ClubId == clubId).OrderBy(e => e.CharacterName).ToListAsync();
-        return list.Select(e => new VipEntry
+        var list = await _db.VipEntries.Where(e => e.ClubId == clubId).ToListAsync();
+        var res = new List<VipEntry>(list.Count);
+        foreach (var e in list)
         {
-            CharacterName = e.CharacterName,
-            HomeWorld = e.HomeWorld,
-            CreatedAt = e.CreatedAt,
-            ExpiresAt = e.ExpiresAt,
-            Duration = e.Duration
-        }).ToArray();
+            var name = _crypto.DecryptString(e.CharacterName);
+            var world = _crypto.DecryptString(e.HomeWorld);
+            res.Add(new VipEntry { CharacterName = name, HomeWorld = world, CreatedAt = e.CreatedAt, ExpiresAt = e.ExpiresAt, Duration = e.Duration });
+        }
+        return res.OrderBy(x => x.CharacterName, StringComparer.Ordinal).ToArray();
     }
 
     public async Task<DjEntry[]> LoadDjEntriesAsync(string clubId)
@@ -86,14 +88,16 @@ public sealed class EfStore
 
     public async Task PersistAddVipAsync(string clubId, VipEntry entry)
     {
-        var exists = await _db.VipEntries.AnyAsync(e => e.ClubId == clubId && e.CharacterName == entry.CharacterName && e.HomeWorld == entry.HomeWorld);
-        if (!exists)
+        var list = await _db.VipEntries.Where(e => e.ClubId == clubId).ToListAsync();
+        var tgt = list.FirstOrDefault(e => string.Equals(_crypto.DecryptString(e.CharacterName), entry.CharacterName, StringComparison.Ordinal)
+                                         && string.Equals(_crypto.DecryptString(e.HomeWorld), entry.HomeWorld, StringComparison.Ordinal));
+        if (tgt == null)
         {
             _db.VipEntries.Add(new VipEntryEntity
             {
                 ClubId = clubId,
-                CharacterName = entry.CharacterName,
-                HomeWorld = entry.HomeWorld,
+                CharacterName = _crypto.EncryptDeterministic(entry.CharacterName, "vip:" + clubId),
+                HomeWorld = _crypto.EncryptDeterministic(entry.HomeWorld, "vip:" + clubId),
                 CreatedAt = entry.CreatedAt,
                 ExpiresAt = entry.ExpiresAt,
                 Duration = entry.Duration
@@ -101,23 +105,22 @@ public sealed class EfStore
         }
         else
         {
-            var e = await _db.VipEntries.FirstAsync(x => x.ClubId == clubId && x.CharacterName == entry.CharacterName && x.HomeWorld == entry.HomeWorld);
-            e.CreatedAt = entry.CreatedAt;
-            e.ExpiresAt = entry.ExpiresAt;
-            e.Duration = entry.Duration;
-            _db.VipEntries.Update(e);
+            tgt.CreatedAt = entry.CreatedAt;
+            tgt.ExpiresAt = entry.ExpiresAt;
+            tgt.Duration = entry.Duration;
+            _db.VipEntries.Update(tgt);
         }
         await _db.SaveChangesAsync();
     }
 
     public async Task PersistRemoveVipAsync(string clubId, string characterName, string homeWorld)
     {
-        var e = await _db.VipEntries.FirstOrDefaultAsync(x => x.ClubId == clubId && x.CharacterName == characterName && x.HomeWorld == homeWorld);
-        if (e != null)
-        {
-            _db.VipEntries.Remove(e);
-            await _db.SaveChangesAsync();
-        }
+        var list = await _db.VipEntries.Where(x => x.ClubId == clubId).ToListAsync();
+        var e = list.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.CharacterName), characterName, StringComparison.Ordinal)
+                                      && string.Equals(_crypto.DecryptString(x.HomeWorld), homeWorld, StringComparison.Ordinal));
+        if (e == null) return;
+        _db.VipEntries.Remove(e);
+        await _db.SaveChangesAsync();
     }
 
     public async Task PersistAddOrUpdateDjAsync(string clubId, DjEntry entry)
@@ -163,24 +166,26 @@ public sealed class EfStore
 
     public async Task<StaffUserInfo?> GetStaffUserAsync(string clubId, string username)
     {
-        var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Username == username);
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
         if (baseUser == null) return null;
         var member = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.UserUid == baseUser.Uid);
         if (member == null) return null;
-        return new StaffUserInfo { Username = baseUser.Username, PasswordHash = baseUser.PasswordHash, Job = member.Job, Role = member.Role, CreatedAt = member.CreatedAt };
+        return new StaffUserInfo { Username = _crypto.DecryptString(baseUser.Username), PasswordHash = baseUser.PasswordHash, Job = member.Job, Role = member.Role, CreatedAt = member.CreatedAt };
     }
 
     public async Task<StaffUserInfo?> GetStaffUserByUsernameAsync(string username)
     {
-        var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Username == username);
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
         if (baseUser == null) return null;
-        return new StaffUserInfo { Username = baseUser.Username, PasswordHash = baseUser.PasswordHash, Job = "Unassigned", Role = "power", CreatedAt = baseUser.CreatedAt, Uid = baseUser.Uid };
+        return new StaffUserInfo { Username = _crypto.DecryptString(baseUser.Username), PasswordHash = baseUser.PasswordHash, Job = "Unassigned", Role = "power", CreatedAt = baseUser.CreatedAt, Uid = baseUser.Uid };
     }
 
     public async Task<string?> GetUsernameByUidAsync(string uid)
     {
         var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Uid == uid);
-        return baseUser?.Username;
+        return baseUser == null ? null : _crypto.DecryptString(baseUser.Username);
     }
 
     public async Task<StaffUserInfo[]> GetStaffUsersAsync(string clubId)
@@ -188,9 +193,9 @@ public sealed class EfStore
         var list = await _db.StaffUsers.Where(x => x.ClubId == clubId).ToListAsync();
         var uids = list.Select(x => x.UserUid).Distinct().ToArray();
         var baseUsers = await _db.BaseUsers.Where(b => uids.Contains(b.Uid)).ToDictionaryAsync(b => b.Uid, b => b);
-        return list.OrderBy(x => baseUsers.TryGetValue(x.UserUid, out var bu) ? bu.Username : x.UserUid).Select(u => new StaffUserInfo
+        return list.OrderBy(x => baseUsers.TryGetValue(x.UserUid, out var bu) ? _crypto.DecryptString(bu.Username) : x.UserUid, StringComparer.Ordinal).Select(u => new StaffUserInfo
         {
-            Username = (baseUsers.TryGetValue(u.UserUid, out var bu) ? bu.Username : u.UserUid),
+            Username = (baseUsers.TryGetValue(u.UserUid, out var bu) ? _crypto.DecryptString(bu.Username) : u.UserUid),
             PasswordHash = (baseUsers.TryGetValue(u.UserUid, out var bu2) ? bu2.PasswordHash : string.Empty),
             Job = u.Job,
             Role = u.Role,
@@ -201,10 +206,11 @@ public sealed class EfStore
 
     public async Task CreateStaffUserAsync(string clubId, string username, string passwordHash)
     {
-        var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Username == username);
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
         if (baseUser == null)
         {
-            baseUser = new BaseUserEntity { Uid = Util.NewUid(), Username = username, PasswordHash = passwordHash, CreatedAt = DateTimeOffset.UtcNow };
+            baseUser = new BaseUserEntity { Uid = Util.NewUid(), Username = _crypto.EncryptDeterministic(username, "user"), PasswordHash = passwordHash, CreatedAt = DateTimeOffset.UtcNow };
             _db.BaseUsers.Add(baseUser);
             await _db.SaveChangesAsync();
         }
@@ -216,9 +222,10 @@ public sealed class EfStore
 
     public async Task<bool> CreateBaseUserAsync(string username, string passwordHash)
     {
-        var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Username == username);
-        if (baseUser != null) return false;
-        baseUser = new BaseUserEntity { Uid = Util.NewUid(), Username = username, PasswordHash = passwordHash, CreatedAt = DateTimeOffset.UtcNow };
+        var buList = await _db.BaseUsers.ToListAsync();
+        var exists = buList.Any(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
+        if (exists) return false;
+        var baseUser = new BaseUserEntity { Uid = Util.NewUid(), Username = _crypto.EncryptDeterministic(username, "user"), PasswordHash = passwordHash, CreatedAt = DateTimeOffset.UtcNow };
         _db.BaseUsers.Add(baseUser);
         await _db.SaveChangesAsync();
         return true;
@@ -226,7 +233,8 @@ public sealed class EfStore
 
     public async Task DeleteStaffUserAsync(string clubId, string username)
     {
-        var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Username == username);
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
         if (baseUser == null) return;
         var u = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.UserUid == baseUser.Uid);
         if (u != null)
@@ -238,7 +246,8 @@ public sealed class EfStore
 
     public async Task UpdateStaffUserJobAsync(string clubId, string username, string job)
     {
-        var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Username == username);
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
         if (baseUser == null) return;
         var u = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.UserUid == baseUser.Uid);
         if (u != null)
@@ -251,7 +260,8 @@ public sealed class EfStore
 
     public async Task UpdateStaffUserRoleAsync(string clubId, string username, string role)
     {
-        var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Username == username);
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
         if (baseUser == null) return;
         var u = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.UserUid == baseUser.Uid);
         if (u != null)
@@ -264,7 +274,8 @@ public sealed class EfStore
 
     public async Task UpdateStaffPasswordAsync(string clubId, string username, string newHash)
     {
-        var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Username == username);
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
         if (baseUser == null) return;
         baseUser.PasswordHash = newHash;
         _db.BaseUsers.Update(baseUser);
@@ -273,7 +284,8 @@ public sealed class EfStore
 
     public async Task<string?> GetStaffPasswordHashAsync(string clubId, string username)
     {
-        var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Username == username);
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
         return baseUser?.PasswordHash;
     }
 
@@ -326,7 +338,9 @@ public sealed class EfStore
 
     public async Task<bool> ExistsVipAsync(string clubId, string characterName, string homeWorld)
     {
-        return await _db.VipEntries.AnyAsync(e => e.ClubId == clubId && e.CharacterName == characterName && e.HomeWorld == homeWorld);
+        var list = await _db.VipEntries.Where(e => e.ClubId == clubId).ToListAsync();
+        return list.Any(e => string.Equals(_crypto.DecryptString(e.CharacterName), characterName, StringComparison.Ordinal)
+                          && string.Equals(_crypto.DecryptString(e.HomeWorld), homeWorld, StringComparison.Ordinal));
     }
 
     public async Task AddJobAsync(string clubId, string name)
@@ -351,14 +365,16 @@ public sealed class EfStore
 
     public async Task<string[]> GetUserClubsAsync(string username)
     {
-        var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Username == username);
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
         if (baseUser == null) return Array.Empty<string>();
         return await _db.StaffUsers.Where(x => x.UserUid == baseUser.Uid).Select(x => x.ClubId).Distinct().OrderBy(x => x).ToArrayAsync();
     }
 
     public async Task<bool> UserExistsAsync(string clubId, string username)
     {
-        var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Username == username);
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
         if (baseUser == null) return false;
         return await _db.StaffUsers.AnyAsync(x => x.ClubId == clubId && x.UserUid == baseUser.Uid);
     }
@@ -375,7 +391,7 @@ public sealed class EfStore
         _db.Clubs.Add(new ClubEntity
         {
             ClubId = clubId,
-            CreatedByUsername = creatorUsername ?? string.Empty,
+            CreatedByUsername = string.IsNullOrWhiteSpace(creatorUsername) ? string.Empty : _crypto.EncryptDeterministic(creatorUsername!, "club:" + clubId),
             CreatedAt = DateTimeOffset.UtcNow,
             AccessKey = VenuePlus.Server.Util.NewUid(24)
         });
@@ -384,7 +400,8 @@ public sealed class EfStore
 
     public async Task<string[]> GetCreatedClubsAsync(string username)
     {
-        return await _db.Clubs.Where(x => x.CreatedByUsername == username).Select(x => x.ClubId).OrderBy(x => x).ToArrayAsync();
+        var list = await _db.Clubs.ToListAsync();
+        return list.Where(x => string.Equals(_crypto.DecryptString(x.CreatedByUsername), username, StringComparison.Ordinal)).Select(x => x.ClubId).OrderBy(x => x).ToArray();
     }
 
     public async Task DeleteClubAsync(string clubId)
@@ -397,6 +414,42 @@ public sealed class EfStore
         if (rights.Count > 0) _db.JobRights.RemoveRange(rights);
         var club = await _db.Clubs.FirstOrDefaultAsync(c => c.ClubId == clubId);
         if (club != null) _db.Clubs.Remove(club);
+        await _db.SaveChangesAsync();
+    }
+
+    public async Task UpgradeEncryptionAsync()
+    {
+        var users = await _db.BaseUsers.ToListAsync();
+        foreach (var u in users)
+        {
+            if (!_crypto.IsEncrypted(u.Username))
+            {
+                u.Username = _crypto.EncryptDeterministic(u.Username, "user");
+                _db.BaseUsers.Update(u);
+            }
+        }
+        var clubs = await _db.Clubs.ToListAsync();
+        foreach (var c in clubs)
+        {
+            if (!string.IsNullOrWhiteSpace(c.CreatedByUsername) && !_crypto.IsEncrypted(c.CreatedByUsername))
+            {
+                c.CreatedByUsername = _crypto.EncryptDeterministic(c.CreatedByUsername, "club:" + c.ClubId);
+                _db.Clubs.Update(c);
+            }
+        }
+        var vips = await _db.VipEntries.ToListAsync();
+        foreach (var v in vips)
+        {
+            if (!_crypto.IsEncrypted(v.CharacterName))
+            {
+                v.CharacterName = _crypto.EncryptDeterministic(v.CharacterName, "vip:" + v.ClubId);
+            }
+            if (!_crypto.IsEncrypted(v.HomeWorld))
+            {
+                v.HomeWorld = _crypto.EncryptDeterministic(v.HomeWorld, "vip:" + v.ClubId);
+            }
+            _db.VipEntries.Update(v);
+        }
         await _db.SaveChangesAsync();
     }
 
