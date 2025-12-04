@@ -19,6 +19,7 @@ using System.Linq;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Processing;
 using SixLabors.ImageSharp.Formats.Png;
+using Npgsql;
 
 namespace VenuePlus.Server;
 
@@ -41,7 +42,24 @@ public class Program
         else builder.WebHost.UseUrls("http://0.0.0.0:5000");
         if (!string.IsNullOrWhiteSpace(conn))
         {
-            builder.Services.AddDbContext<VenuePlusDbContext>(o => o.UseNpgsql(conn));
+            var npg = new NpgsqlConnectionStringBuilder(conn);
+            var keepAliveConf = builder.Configuration.GetValue<int?>("Database:KeepAlive");
+            var cmdTimeoutConf = builder.Configuration.GetValue<int?>("Database:CommandTimeout");
+            var maxPoolConf = builder.Configuration.GetValue<int?>("Database:MaxPoolSize");
+            var idleLifetimeConf = builder.Configuration.GetValue<int?>("Database:ConnectionIdleLifetime");
+            var pruningConf = builder.Configuration.GetValue<int?>("Database:ConnectionPruningInterval");
+            if (keepAliveConf.HasValue && keepAliveConf.Value > 0) npg.KeepAlive = keepAliveConf.Value;
+            if (cmdTimeoutConf.HasValue && cmdTimeoutConf.Value > 0) npg.CommandTimeout = cmdTimeoutConf.Value;
+            if (maxPoolConf.HasValue && maxPoolConf.Value > 0) npg.MaxPoolSize = maxPoolConf.Value;
+            if (idleLifetimeConf.HasValue && idleLifetimeConf.Value > 0) npg.ConnectionIdleLifetime = idleLifetimeConf.Value;
+            if (pruningConf.HasValue && pruningConf.Value > 0) npg.ConnectionPruningInterval = pruningConf.Value;
+            if (npg.KeepAlive <= 0) npg.KeepAlive = 30;
+            if (npg.CommandTimeout <= 0) npg.CommandTimeout = 15;
+            if (npg.MaxPoolSize <= 0) npg.MaxPoolSize = 100;
+            if (npg.ConnectionIdleLifetime <= 0) npg.ConnectionIdleLifetime = 60;
+            if (npg.ConnectionPruningInterval <= 0) npg.ConnectionPruningInterval = 30;
+            conn = npg.ConnectionString;
+            builder.Services.AddDbContext<VenuePlusDbContext>(o => o.UseNpgsql(conn, npgsql => npgsql.EnableRetryOnFailure(5, TimeSpan.FromSeconds(2), null)));
             builder.Services.AddScoped<EfStore>();
         }
         if (!string.IsNullOrWhiteSpace(pepperConf) && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("VENUEPLUS_PASSWORD_PEPPER")))
