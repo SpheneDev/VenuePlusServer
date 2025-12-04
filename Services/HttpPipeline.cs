@@ -23,7 +23,7 @@ public static class HttpPipeline
         });
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole();
-        builder.Logging.SetMinimumLevel(LogLevel.Debug);
+        builder.Logging.SetMinimumLevel(LogLevel.Information);
         builder.Logging.AddFilter("Microsoft", LogLevel.Information);
         builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Information);
         builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.Information);

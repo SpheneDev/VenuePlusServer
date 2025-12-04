@@ -146,6 +146,7 @@ public static class WebSocketMiddleware
                         var password = root.TryGetProperty("password", out var p) ? (p.GetString() ?? string.Empty) : string.Empty;
                         var clubIdLogin = (WebSocketStore.TryGetClub(id, out var cc) && !string.IsNullOrWhiteSpace(cc)) ? cc! : "default";
                         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password)) { await WebSocketStore.SendAsync(ws, new { type = "login.fail" }); continue; }
+                        if (!LoginRateLimiter.Allow(username)) { await WebSocketStore.SendAsync(ws, new { type = "login.fail" }); app.Logger.LogDebug($"WS login.fail user={username} club={clubIdLogin} reason=rate"); continue; }
                         StaffUserInfo? info = null;
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
@@ -207,6 +208,7 @@ public static class WebSocketMiddleware
                         var password = root.TryGetProperty("password", out var pw) ? (pw.GetString() ?? string.Empty) : string.Empty;
                         var usernameNew = (string.IsNullOrWhiteSpace(characterName) || string.IsNullOrWhiteSpace(homeWorld)) ? string.Empty : (characterName + "@" + homeWorld);
                         if (string.IsNullOrWhiteSpace(usernameNew) || string.IsNullOrWhiteSpace(password)) { await WebSocketStore.SendAsync(ws, new { type = "register.fail", code = 400 }); continue; }
+                        if (!LoginRateLimiter.Allow("reg|" + usernameNew)) { await WebSocketStore.SendAsync(ws, new { type = "register.fail", code = 429 }); continue; }
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
                             using var scopeEfChk = app.Services.CreateScope();
@@ -831,6 +833,7 @@ public static class WebSocketMiddleware
                         try
                         {
                             var bytes = Convert.FromBase64String(raw);
+                            if (bytes.Length > 1024 * 1024) { await WebSocketStore.SendAsync(ws, new { type = "club.logo.update.fail" }); continue; }
                             using var img = Image.Load(bytes);
                             var max = 256;
                             var w = img.Width; var h = img.Height;

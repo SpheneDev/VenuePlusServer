@@ -31,6 +31,7 @@ public class Program
 
         var defaultPassConf = builder.Configuration["Admin:DefaultStaffPassword"] ?? (Environment.GetEnvironmentVariable("VENUEPLUS_DEFAULT_STAFF_PASS") ?? Environment.GetEnvironmentVariable("VENUEPLUS_DEFAULT_STAFF_PASS") ?? string.Empty);
         var conn = builder.Configuration["Database:ConnectionString"] ?? (Environment.GetEnvironmentVariable("VENUEPLUS_DB_CONNECTION") ?? Environment.GetEnvironmentVariable("VENUEPLUS_DB_CONNECTION") ?? string.Empty);
+        var pepperConf = builder.Configuration["Security:PasswordPepper"] ?? string.Empty;
         var urlConf = builder.Configuration["Server:Url"] ?? string.Empty;
         var portConf = builder.Configuration.GetValue<int?>("Server:Port");
         var envUrls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? string.Empty;
@@ -42,6 +43,10 @@ public class Program
         {
             builder.Services.AddDbContext<VenuePlusDbContext>(o => o.UseNpgsql(conn));
             builder.Services.AddScoped<EfStore>();
+        }
+        if (!string.IsNullOrWhiteSpace(pepperConf) && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("VENUEPLUS_PASSWORD_PEPPER")))
+        {
+            Environment.SetEnvironmentVariable("VENUEPLUS_PASSWORD_PEPPER", pepperConf);
         }
         var app = builder.Build();
         HttpPipeline.UseCommonMiddleware(app);
