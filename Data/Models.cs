@@ -47,6 +47,7 @@ public sealed class Rights
     public bool EditVipDuration { get; set; }
     public bool AddDj { get; set; }
     public bool RemoveDj { get; set; }
+    public int Rank { get; set; } = 1;
     public string ColorHex { get; set; } = "#FFFFFF";
     public string IconKey { get; set; } = "User";
 }

@@ -362,14 +362,17 @@ public static class WebSocketMiddleware
                         if (string.Equals(name, "Owner", StringComparison.Ordinal))
                         {
                             var existing = Store.JobRights.TryGetValue(name, out var ex) ? ex : new Rights();
-                            existing.AddVip = true; existing.RemoveVip = true; existing.ManageUsers = true; existing.ManageJobs = true; existing.EditVipDuration = true;
+                            existing.AddVip = true; existing.RemoveVip = true; existing.ManageUsers = true; existing.ManageJobs = true; existing.EditVipDuration = true; existing.AddDj = true; existing.RemoveDj = true; existing.Rank = 10;
                             existing.ColorHex = rights.ColorHex ?? existing.ColorHex ?? "#FFFFFF";
                             existing.IconKey = rights.IconKey ?? existing.IconKey ?? "User";
                             Store.JobRights[name] = existing;
                         }
                         else
                         {
-                            Store.JobRights[name] = rights;
+                            var r = rights ?? new Rights();
+                            if (string.Equals(name, "Unassigned", StringComparison.Ordinal)) r.Rank = 0;
+                            else r.Rank = r.Rank <= 0 ? 1 : (r.Rank > 9 ? 9 : r.Rank);
+                            Store.JobRights[name] = r;
                         }
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
@@ -379,12 +382,15 @@ public static class WebSocketMiddleware
                             {
                                 var rightsDict = await efSvc.GetJobRightsAsync(clubIdCur);
                                 var ex = rightsDict.TryGetValue(name, out var exDb) ? exDb : new Rights();
-                                var merged = new Rights { AddVip = ex.AddVip, RemoveVip = ex.RemoveVip, ManageUsers = ex.ManageUsers, ManageJobs = ex.ManageJobs, EditVipDuration = ex.EditVipDuration, AddDj = true, RemoveDj = true, ColorHex = rights.ColorHex ?? ex.ColorHex ?? "#FFFFFF", IconKey = rights.IconKey ?? ex.IconKey ?? "User" };
+                                var merged = new Rights { AddVip = ex.AddVip, RemoveVip = ex.RemoveVip, ManageUsers = ex.ManageUsers, ManageJobs = ex.ManageJobs, EditVipDuration = ex.EditVipDuration, AddDj = true, RemoveDj = true, Rank = 10, ColorHex = rights.ColorHex ?? ex.ColorHex ?? "#FFFFFF", IconKey = rights.IconKey ?? ex.IconKey ?? "User" };
                                 await efSvc.UpdateJobRightsAsync(clubIdCur, name, merged);
                             }
                             else
                             {
-                                await efSvc.UpdateJobRightsAsync(clubIdCur, name, rights);
+                                var r = rights ?? new Rights();
+                                if (string.Equals(name, "Unassigned", StringComparison.Ordinal)) r.Rank = 0;
+                                else r.Rank = r.Rank <= 0 ? 1 : (r.Rank > 9 ? 9 : r.Rank);
+                                await efSvc.UpdateJobRightsAsync(clubIdCur, name, r);
                             }
                         }
                         else
@@ -426,6 +432,16 @@ public static class WebSocketMiddleware
                             var jobChk = infoDbChk?.Job ?? "Unassigned";
                             canManage = rightsDbChk.TryGetValue(jobChk, out var rChk) && rChk.ManageUsers;
                             if (!(isOwner || canManage)) { await WebSocketStore.SendAsync(ws, new { type = "user.delete.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.delete.fail club={clubIdCur} reason=rights target={targetUsername}"); continue; }
+                            var targetInfo = await efChk.GetStaffUserAsync(clubIdCur, targetUsername);
+                            var targetJob = targetInfo?.Job ?? "Unassigned";
+                            var targetRights = rightsDbChk.TryGetValue(targetJob, out var tr) ? tr : new Rights();
+                            var actorRankDel = rightsDbChk.TryGetValue(jobChk, out var actorRightsDel) ? actorRightsDel.Rank : 1;
+                            var targetRankDel = targetRights.Rank;
+                            if (!isOwner && actorRankDel <= targetRankDel) { await WebSocketStore.SendAsync(ws, new { type = "user.delete.fail", message = "Cannot modify equal or higher rank" }); app.Logger.LogDebug($"WS user.delete.fail club={clubIdCur} reason=rank target={targetUsername}"); continue; }
+                            if (string.Equals(targetJob, "Owner", StringComparison.Ordinal) && !isOwner) { await WebSocketStore.SendAsync(ws, new { type = "user.delete.fail", message = "Only owner can modify owner" }); app.Logger.LogDebug($"WS user.delete.fail club={clubIdCur} reason=owner target={targetUsername}"); continue; }
+                            var listOwners = await efChk.GetStaffUsersAsync(clubIdCur) ?? Array.Empty<StaffUserInfo>();
+                            var ownersCount = listOwners.Count(u => string.Equals(u.Job, "Owner", StringComparison.Ordinal));
+                            if (string.Equals(targetJob, "Owner", StringComparison.Ordinal) && ownersCount <= 1) { await WebSocketStore.SendAsync(ws, new { type = "user.delete.fail", message = "Cannot remove last owner" }); app.Logger.LogDebug($"WS user.delete.fail club={clubIdCur} reason=lastowner target={targetUsername}"); continue; }
                             await efChk.DeleteStaffUserAsync(clubIdCur, targetUsername);
                             using var scopeEfWs = app.Services.CreateScope();
                             var efWs = scopeEfWs.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
@@ -436,6 +452,18 @@ public static class WebSocketMiddleware
                         else
                         {
                             var jobKey = clubIdCur + "|" + targetUsername;
+                            var targetJobMem = Store.ClubUserJobs.TryGetValue(jobKey, out var tjMem) ? tjMem : "Unassigned";
+                            var jobMemChk = Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + username, out var jChk) ? jChk : "Unassigned";
+                            var canManageMem = Store.JobRights.TryGetValue(jobMemChk, out var rmChk) && rmChk.ManageUsers;
+                            var isOwnerMem = Store.CreatedClubs.TryGetValue(clubIdCur, out var ownerUMem) && string.Equals(ownerUMem, username, StringComparison.Ordinal);
+                            if (!(isOwnerMem || canManageMem)) { await WebSocketStore.SendAsync(ws, new { type = "user.delete.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.delete.fail club={clubIdCur} reason=rights mem target={targetUsername}"); continue; }
+                            var targetRightsMem = Store.JobRights.TryGetValue(targetJobMem, out var trMem) ? trMem : new Rights();
+                            var actorRankDelMem = Store.JobRights.TryGetValue(jobMemChk, out var actorRightsDelMem) ? actorRightsDelMem.Rank : 1;
+                            var targetRankDelMem = targetRightsMem.Rank;
+                            if (!isOwnerMem && actorRankDelMem <= targetRankDelMem) { await WebSocketStore.SendAsync(ws, new { type = "user.delete.fail", message = "Cannot modify equal or higher rank" }); app.Logger.LogDebug($"WS user.delete.fail club={clubIdCur} reason=rank mem target={targetUsername}"); continue; }
+                            if (string.Equals(targetJobMem, "Owner", StringComparison.Ordinal) && !isOwnerMem) { await WebSocketStore.SendAsync(ws, new { type = "user.delete.fail", message = "Only owner can modify owner" }); app.Logger.LogDebug($"WS user.delete.fail club={clubIdCur} reason=owner mem target={targetUsername}"); continue; }
+                            var ownersCountMem = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubIdCur + "|", StringComparison.Ordinal)).Select(k => k.Substring(clubIdCur.Length + 1)).Count(u => string.Equals(Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + u, out var jv) ? jv : "Unassigned", "Owner", StringComparison.Ordinal));
+                            if (string.Equals(targetJobMem, "Owner", StringComparison.Ordinal) && ownersCountMem <= 1) { await WebSocketStore.SendAsync(ws, new { type = "user.delete.fail", message = "Cannot remove last owner" }); app.Logger.LogDebug($"WS user.delete.fail club={clubIdCur} reason=lastowner mem target={targetUsername}"); continue; }
                             Store.ClubUserJobs.TryRemove(jobKey, out _);
                             await Persistence.SaveAsync();
                             var usersClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubIdCur + "|", StringComparison.Ordinal)).Select(k => k.Substring(clubIdCur.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
@@ -469,11 +497,32 @@ public static class WebSocketMiddleware
                             var rightsDbChk = await efChk.GetJobRightsAsync(clubIdCur);
                             var jobChk = infoDbChk?.Job ?? "Unassigned";
                             canManage = rightsDbChk.TryGetValue(jobChk, out var rChk) && rChk.ManageUsers;
+                            var actorRank = rightsDbChk.TryGetValue(jobChk, out var actorRightsChk) ? actorRightsChk.Rank : 1;
                             if (!(isOwner || canManage)) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=rights target={targetUsername}"); continue; }
                             if (string.Equals(targetUsername, username, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(newJob) && !isOwner)
                             {
                                 var okSelf = rightsDbChk.TryGetValue(newJob, out var rNew) && rNew.ManageJobs;
+                                var newRankSelf = rightsDbChk.TryGetValue(newJob, out var rSelf) ? rSelf.Rank : 1;
+                                if (actorRank <= newRankSelf) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Cannot assign yourself a role of equal or higher rank" }); continue; }
                                 if (!okSelf) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Cannot assign yourself a role that removes ManageJobs" }); continue; }
+                            }
+                            var targetInfo = await efChk.GetStaffUserAsync(clubIdCur, targetUsername);
+                            var curTargetJob = targetInfo?.Job ?? "Unassigned";
+                            var curTargetRights = rightsDbChk.TryGetValue(curTargetJob, out var trCur) ? trCur : new Rights();
+                            var targetRank = curTargetRights.Rank;
+                            if (!isOwner && actorRank <= targetRank) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Cannot modify equal or higher rank" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=rank target={targetUsername}"); continue; }
+                            if (string.Equals(curTargetJob, "Owner", StringComparison.Ordinal) && !isOwner) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Only owner can modify owner" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=owner target={targetUsername}"); continue; }
+                            if (string.Equals(newJob, "Owner", StringComparison.Ordinal) && !isOwner) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Only owner can assign owner" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=assignowner target={targetUsername}"); continue; }
+                            if (!string.IsNullOrWhiteSpace(newJob) && !string.Equals(newJob, curTargetJob, StringComparison.Ordinal) && string.Equals(curTargetJob, "Owner", StringComparison.Ordinal) && !string.Equals(newJob, "Owner", StringComparison.Ordinal))
+                            {
+                                var listOwners = await efChk.GetStaffUsersAsync(clubIdCur) ?? Array.Empty<StaffUserInfo>();
+                                var ownersCount = listOwners.Count(u => string.Equals(u.Job, "Owner", StringComparison.Ordinal));
+                                if (ownersCount <= 1) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Cannot demote last owner" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=lastowner target={targetUsername}"); continue; }
+                            }
+                            if (!string.IsNullOrWhiteSpace(newJob) && !isOwner)
+                            {
+                                var newRank = rightsDbChk.TryGetValue(newJob, out var rNewRank) ? rNewRank.Rank : 1;
+                                if (actorRank <= newRank) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Cannot assign role with equal or higher rank" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=newrank target={targetUsername} job={newJob}"); continue; }
                             }
                             if (!string.IsNullOrWhiteSpace(newJob)) await efChk.UpdateStaffUserJobAsync(clubIdCur, targetUsername, newJob);
                             if (!string.IsNullOrWhiteSpace(newRole)) await efChk.UpdateStaffUserRoleAsync(clubIdCur, targetUsername, newRole);
@@ -489,13 +538,32 @@ public static class WebSocketMiddleware
                             if (!hadJob) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "User not in club" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=notmember target={targetUsername}"); continue; }
                             var jobMemChk = Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + username, out var jChk) ? jChk : "Unassigned";
                             var canManageMem = Store.JobRights.TryGetValue(jobMemChk, out var rmChk) && rmChk.ManageUsers;
+                            var actorRankMem = Store.JobRights.TryGetValue(jobMemChk, out var actorRightsMem) ? actorRightsMem.Rank : 1;
                             var isOwnerMem = Store.CreatedClubs.TryGetValue(clubIdCur, out var ownerU) && string.Equals(ownerU, username, StringComparison.Ordinal);
                             if (!(isOwnerMem || canManageMem)) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=rights mem target={targetUsername}"); continue; }
                             var isSelfMem = string.Equals(targetUsername, username, StringComparison.Ordinal);
                             if (isSelfMem && !string.IsNullOrWhiteSpace(newJob) && !isOwnerMem)
                             {
                                 var okSelfMem = Store.JobRights.TryGetValue(newJob, out var rNewMem) && rNewMem.ManageJobs;
+                                var newRankSelfMem = Store.JobRights.TryGetValue(newJob, out var rSelfMem) ? rSelfMem.Rank : 1;
+                                if (actorRankMem <= newRankSelfMem) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Cannot assign yourself a role of equal or higher rank" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=selfrank target={targetUsername} job={newJob}"); continue; }
                                 if (!okSelfMem) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Cannot assign yourself a role that removes ManageJobs" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=selfmanage target={targetUsername} job={newJob}"); continue; }
+                            }
+                            var curTargetJobMem = Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + targetUsername, out var curJMem) ? curJMem : "Unassigned";
+                            var curTargetRightsMem = Store.JobRights.TryGetValue(curTargetJobMem, out var trCurMem) ? trCurMem : new Rights();
+                            var targetRankMem = curTargetRightsMem.Rank;
+                            if (!isOwnerMem && actorRankMem <= targetRankMem) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Cannot modify equal or higher rank" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=rank mem target={targetUsername}"); continue; }
+                            if (string.Equals(curTargetJobMem, "Owner", StringComparison.Ordinal) && !isOwnerMem) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Only owner can modify owner" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=owner mem target={targetUsername}"); continue; }
+                            if (string.Equals(newJob, "Owner", StringComparison.Ordinal) && !isOwnerMem) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Only owner can assign owner" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=assignowner mem target={targetUsername}"); continue; }
+                            if (!string.IsNullOrWhiteSpace(newJob) && !string.Equals(newJob, curTargetJobMem, StringComparison.Ordinal) && string.Equals(curTargetJobMem, "Owner", StringComparison.Ordinal) && !string.Equals(newJob, "Owner", StringComparison.Ordinal))
+                            {
+                                var ownersCountMem = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubIdCur + "|", StringComparison.Ordinal)).Select(k => k.Substring(clubIdCur.Length + 1)).Count(u => string.Equals(Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + u, out var jv) ? jv : "Unassigned", "Owner", StringComparison.Ordinal));
+                                if (ownersCountMem <= 1) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Cannot demote last owner" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=lastowner mem target={targetUsername}"); continue; }
+                            }
+                            if (!string.IsNullOrWhiteSpace(newJob) && !isOwnerMem)
+                            {
+                                var newRankMem = Store.JobRights.TryGetValue(newJob, out var rNewRankMem) ? rNewRankMem.Rank : 1;
+                                if (actorRankMem <= newRankMem) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Cannot assign role with equal or higher rank" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=newrank mem target={targetUsername} job={newJob}"); continue; }
                             }
                             if (!string.IsNullOrWhiteSpace(newJob)) Store.ClubUserJobs[clubIdCur + "|" + targetUsername] = newJob;
                             if (Store.StaffUsers.TryGetValue(targetUsername, out var info))

@@ -58,6 +58,7 @@ public sealed class JobRightEntity
     public bool EditVipDuration { get; set; }
     public bool AddDj { get; set; }
     public bool RemoveDj { get; set; }
+    public int Rank { get; set; } = 1;
     [MaxLength(7)]
     public string ColorHex { get; set; } = "#FFFFFF";
     [MaxLength(64)]

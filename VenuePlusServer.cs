@@ -83,6 +83,7 @@ public class Program
             var defaultClub = "default";
             var efSvcInit = scope.ServiceProvider.GetRequiredService<EfStore>();
             await efSvcInit.EnsureDefaultsAsync(defaultClub, defaultPassConf);
+            await efSvcInit.NormalizeAllJobRanksAsync();
             try { await efSvcInit.UpgradeEncryptionAsync(); }
             catch (Exception ex) { app.Logger.LogDebug($"Data encryption upgrade failed: {ex.Message}"); }
             var jobs = await efSvcInit.GetJobRightsAsync(defaultClub);
@@ -90,6 +91,7 @@ public class Program
             {
                 Store.JobRights.Clear();
                 foreach (var kv in jobs) Store.JobRights[kv.Key] = kv.Value;
+                try { await WebSocketStore.BroadcastToClubAsync(defaultClub, new { type = "jobs.rights", rights = jobs }); } catch { }
             }
             var staff = await efSvcInit.GetStaffUsersAsync(defaultClub);
             if (staff.Length > 0)
@@ -112,12 +114,12 @@ public class Program
     {
         if (Store.JobRights.IsEmpty)
         {
-            Store.JobRights["Unassigned"] = new Rights();
-            Store.JobRights["Greeter"] = new Rights();
-            Store.JobRights["Barkeeper"] = new Rights();
-            Store.JobRights["Dancer"] = new Rights();
-            Store.JobRights["Escort"] = new Rights();
-            Store.JobRights["Owner"] = new Rights { AddVip = true, RemoveVip = true, ManageUsers = true, ManageJobs = true };
+            Store.JobRights["Unassigned"] = new Rights { Rank = 0 };
+            Store.JobRights["Greeter"] = new Rights { Rank = 1 };
+            Store.JobRights["Barkeeper"] = new Rights { Rank = 1 };
+            Store.JobRights["Dancer"] = new Rights { Rank = 1 };
+            Store.JobRights["Escort"] = new Rights { Rank = 1 };
+            Store.JobRights["Owner"] = new Rights { AddVip = true, RemoveVip = true, ManageUsers = true, ManageJobs = true, AddDj = true, RemoveDj = true, Rank = 10 };
         }
         if (Store.StaffUsers.IsEmpty)
         {
