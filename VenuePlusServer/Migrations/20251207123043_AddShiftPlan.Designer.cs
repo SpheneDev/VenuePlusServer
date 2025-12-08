@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using VenuePlus.Server.Data;
@@ -11,9 +12,11 @@ using VenuePlus.Server.Data;
 namespace VenuePlus.Server.VenuePlusServer.Migrations
 {
     [DbContext(typeof(VenuePlusDbContext))]
-    partial class VenuePlusDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251207123043_AddShiftPlan")]
+    partial class AddShiftPlan
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

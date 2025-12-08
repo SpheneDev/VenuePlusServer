@@ -119,7 +119,7 @@ public class Program
             Store.JobRights["Barkeeper"] = new Rights { Rank = 1 };
             Store.JobRights["Dancer"] = new Rights { Rank = 1 };
             Store.JobRights["Escort"] = new Rights { Rank = 1 };
-            Store.JobRights["Owner"] = new Rights { AddVip = true, RemoveVip = true, ManageUsers = true, ManageJobs = true, AddDj = true, RemoveDj = true, Rank = 10 };
+            Store.JobRights["Owner"] = new Rights { AddVip = true, RemoveVip = true, ManageUsers = true, ManageJobs = true, AddDj = true, RemoveDj = true, EditVipDuration = true, EditShiftPlan = true, Rank = 10 };
         }
         if (Store.StaffUsers.IsEmpty)
         {

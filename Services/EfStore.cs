@@ -117,6 +117,27 @@ public sealed class EfStore
         }
     }
 
+    public async Task<ShiftEntry[]> LoadShiftEntriesAsync(string clubId)
+    {
+        try
+        {
+            var list = await _db.Shifts.Where(e => e.ClubId == clubId).OrderBy(e => e.StartAt).ToListAsync();
+            return list.Select(e => new ShiftEntry
+            {
+                Id = e.Id,
+                Title = e.Title,
+                AssignedUid = e.AssignedUid,
+                Job = e.Job,
+                StartAt = e.StartAt,
+                EndAt = e.EndAt
+            }).ToArray();
+        }
+        catch
+        {
+            return Array.Empty<ShiftEntry>();
+        }
+    }
+
     public async Task PersistAddVipAsync(string clubId, VipEntry entry)
     {
         var list = await _db.VipEntries.Where(e => e.ClubId == clubId).ToListAsync();
@@ -189,6 +210,56 @@ public sealed class EfStore
             if (e != null)
             {
                 _db.DjEntries.Remove(e);
+                await _db.SaveChangesAsync();
+            }
+        }
+        catch { }
+    }
+
+    public async Task<ShiftEntry> PersistAddOrUpdateShiftAsync(string clubId, ShiftEntry entry)
+    {
+        try
+        {
+            var exists = await _db.Shifts.AnyAsync(s => s.ClubId == clubId && s.Id == entry.Id);
+            if (!exists)
+            {
+                var newId = entry.Id == Guid.Empty ? Guid.NewGuid() : entry.Id;
+                _db.Shifts.Add(new ShiftEntryEntity
+                {
+                    Id = newId,
+                    ClubId = clubId,
+                    Title = entry.Title ?? string.Empty,
+                    AssignedUid = string.IsNullOrWhiteSpace(entry.AssignedUid) ? null : entry.AssignedUid,
+                    Job = string.IsNullOrWhiteSpace(entry.Job) ? null : entry.Job,
+                    StartAt = entry.StartAt,
+                    EndAt = entry.EndAt
+                });
+                entry.Id = newId;
+            }
+            else
+            {
+                var e = await _db.Shifts.FirstAsync(s => s.ClubId == clubId && s.Id == entry.Id);
+                e.Title = entry.Title ?? string.Empty;
+                e.AssignedUid = string.IsNullOrWhiteSpace(entry.AssignedUid) ? null : entry.AssignedUid;
+                e.Job = string.IsNullOrWhiteSpace(entry.Job) ? null : entry.Job;
+                e.StartAt = entry.StartAt;
+                e.EndAt = entry.EndAt;
+                _db.Shifts.Update(e);
+            }
+            await _db.SaveChangesAsync();
+            return entry;
+        }
+        catch { return entry; }
+    }
+
+    public async Task PersistRemoveShiftAsync(string clubId, Guid id)
+    {
+        try
+        {
+            var e = await _db.Shifts.FirstOrDefaultAsync(s => s.ClubId == clubId && s.Id == id);
+            if (e != null)
+            {
+                _db.Shifts.Remove(e);
                 await _db.SaveChangesAsync();
             }
         }
@@ -330,15 +401,15 @@ public sealed class EfStore
             if (string.Equals(j.JobName, "Owner", StringComparison.Ordinal)) rankVal = 10;
             else if (string.Equals(j.JobName, "Unassigned", StringComparison.Ordinal)) rankVal = 0;
             else rankVal = j.Rank <= 0 ? 1 : (j.Rank > 9 ? 9 : j.Rank);
-            dict[j.JobName] = new Rights { AddVip = j.AddVip, RemoveVip = j.RemoveVip, ManageUsers = j.ManageUsers, ManageJobs = j.ManageJobs, EditVipDuration = j.EditVipDuration, AddDj = j.AddDj, RemoveDj = j.RemoveDj, Rank = rankVal, ColorHex = j.ColorHex, IconKey = j.IconKey };
+            dict[j.JobName] = new Rights { AddVip = j.AddVip, RemoveVip = j.RemoveVip, ManageUsers = j.ManageUsers, ManageJobs = j.ManageJobs, EditVipDuration = j.EditVipDuration, AddDj = j.AddDj, RemoveDj = j.RemoveDj, EditShiftPlan = j.EditShiftPlan, Rank = rankVal, ColorHex = j.ColorHex, IconKey = j.IconKey };
         }
         if (!dict.TryGetValue("Owner", out var own))
         {
-            dict["Owner"] = new Rights { AddVip = true, RemoveVip = true, ManageUsers = true, ManageJobs = true, EditVipDuration = true, AddDj = true, RemoveDj = true, Rank = 10, ColorHex = dict.TryGetValue("Owner", out var ex) ? (ex.ColorHex ?? "#FFFFFF") : "#FFFFFF", IconKey = dict.TryGetValue("Owner", out var ex2) ? (ex2.IconKey ?? "User") : "User" };
+            dict["Owner"] = new Rights { AddVip = true, RemoveVip = true, ManageUsers = true, ManageJobs = true, EditVipDuration = true, AddDj = true, RemoveDj = true, EditShiftPlan = true, Rank = 10, ColorHex = dict.TryGetValue("Owner", out var ex) ? (ex.ColorHex ?? "#FFFFFF") : "#FFFFFF", IconKey = dict.TryGetValue("Owner", out var ex2) ? (ex2.IconKey ?? "User") : "User" };
         }
         else
         {
-            own.AddVip = true; own.RemoveVip = true; own.ManageUsers = true; own.ManageJobs = true; own.EditVipDuration = true; own.AddDj = true; own.RemoveDj = true; own.Rank = 10;
+            own.AddVip = true; own.RemoveVip = true; own.ManageUsers = true; own.ManageJobs = true; own.EditVipDuration = true; own.AddDj = true; own.RemoveDj = true; own.EditShiftPlan = true; own.Rank = 10;
             dict["Owner"] = own;
         }
         return dict;
@@ -365,6 +436,7 @@ public sealed class EfStore
         j.EditVipDuration = isOwner ? true : rights.EditVipDuration;
         j.AddDj = isOwner ? true : rights.AddDj;
         j.RemoveDj = isOwner ? true : rights.RemoveDj;
+        j.EditShiftPlan = isOwner ? true : rights.EditShiftPlan;
         if (isOwner) j.Rank = 10;
         else if (string.Equals(name, "Unassigned", StringComparison.Ordinal)) j.Rank = 0;
         else j.Rank = rights.Rank <= 0 ? 1 : (rights.Rank > 9 ? 9 : rights.Rank);

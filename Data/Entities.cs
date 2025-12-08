@@ -58,6 +58,7 @@ public sealed class JobRightEntity
     public bool EditVipDuration { get; set; }
     public bool AddDj { get; set; }
     public bool RemoveDj { get; set; }
+    public bool EditShiftPlan { get; set; }
     public int Rank { get; set; } = 1;
     [MaxLength(7)]
     public string ColorHex { get; set; } = "#FFFFFF";
@@ -111,4 +112,22 @@ public sealed class DjEntryEntity
     [MaxLength(256)]
     public string TwitchLink { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class ShiftEntryEntity
+{
+    [Key]
+    public Guid Id { get; set; }
+    [Required]
+    [MaxLength(64)]
+    public string ClubId { get; set; } = string.Empty;
+    [Required]
+    [MaxLength(128)]
+    public string Title { get; set; } = string.Empty;
+    [MaxLength(15)]
+    public string? AssignedUid { get; set; }
+    [MaxLength(64)]
+    public string? Job { get; set; }
+    public DateTimeOffset StartAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset EndAt { get; set; } = DateTimeOffset.UtcNow.AddHours(2);
 }

@@ -19,6 +19,16 @@ public sealed class DjEntry
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+public sealed class ShiftEntry
+{
+    public Guid Id { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string? AssignedUid { get; set; }
+    public string? Job { get; set; }
+    public DateTimeOffset StartAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset EndAt { get; set; } = DateTimeOffset.UtcNow.AddHours(2);
+}
+
 public sealed class StaffUser
 {
     public string Username { get; set; } = string.Empty;
@@ -47,6 +57,7 @@ public sealed class Rights
     public bool EditVipDuration { get; set; }
     public bool AddDj { get; set; }
     public bool RemoveDj { get; set; }
+    public bool EditShiftPlan { get; set; }
     public int Rank { get; set; } = 1;
     public string ColorHex { get; set; } = "#FFFFFF";
     public string IconKey { get; set; } = "User";

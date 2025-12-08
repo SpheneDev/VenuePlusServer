@@ -8,6 +8,7 @@ public static class Store
     public static readonly ConcurrentDictionary<string, VipEntry> VipEntries = new(StringComparer.Ordinal);
     public static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> ClubVipKeys = new(StringComparer.Ordinal);
     public static readonly ConcurrentDictionary<string, DjEntry> DjEntries = new(StringComparer.Ordinal);
+    public static readonly ConcurrentDictionary<string, ShiftEntry> ShiftEntries = new(StringComparer.Ordinal);
     public static readonly ConcurrentDictionary<string, StaffUserInfo> StaffUsers = new(StringComparer.Ordinal);
     public static readonly ConcurrentDictionary<string, string> StaffSessions = new(StringComparer.Ordinal);
     public static readonly ConcurrentDictionary<string, DateTimeOffset> StaffSessionExpiry = new();

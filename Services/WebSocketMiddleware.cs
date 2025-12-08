@@ -44,6 +44,8 @@ public static class WebSocketMiddleware
                 await WebSocketStore.SendAsync(ws, new { type = "vip.snapshot", entries = entriesDb.OrderBy(e => e.CharacterName, StringComparer.Ordinal).ToArray() });
                 var djsDb = await efSvcWs.LoadDjEntriesAsync(clubIdWs) ?? Array.Empty<DjEntry>();
                 await WebSocketStore.SendAsync(ws, new { type = "dj.snapshot", entries = djsDb.OrderBy(e => e.DjName, StringComparer.Ordinal).ToArray() });
+                var shiftsDb = await efSvcWs.LoadShiftEntriesAsync(clubIdWs) ?? Array.Empty<ShiftEntry>();
+                await WebSocketStore.SendAsync(ws, new { type = "shift.snapshot", entries = shiftsDb.OrderBy(e => e.StartAt).ToArray() });
                 var usersDbInit = await efSvcWs.GetStaffUsersAsync(clubIdWs) ?? Array.Empty<StaffUserInfo>();
                 await WebSocketStore.SendAsync(ws, new { type = "users.list", users = usersDbInit.Select(u => u.Username).OrderBy(u => u, StringComparer.Ordinal).ToArray() });
                 await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDbInit.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Job = u.Job, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid }).ToArray() });
@@ -60,6 +62,9 @@ public static class WebSocketMiddleware
                 var djKeys = Store.DjEntries.Keys.Where(k => k.StartsWith(clubIdWs + "|", StringComparison.Ordinal)).ToArray();
                 var djList = djKeys.Select(k => Store.DjEntries.TryGetValue(k, out var e) ? e : null).Where(e => e != null).Select(e => e!).OrderBy(e => e.DjName, StringComparer.Ordinal).ToArray();
                 await WebSocketStore.SendAsync(ws, new { type = "dj.snapshot", entries = djList });
+                var shiftKeys = Store.ShiftEntries.Keys.Where(k => k.StartsWith(clubIdWs + "|", StringComparison.Ordinal)).ToArray();
+                var shiftList = shiftKeys.Select(k => Store.ShiftEntries.TryGetValue(k, out var e) ? e : null).Where(e => e != null).Select(e => e!).OrderBy(e => e.StartAt).ToArray();
+                await WebSocketStore.SendAsync(ws, new { type = "shift.snapshot", entries = shiftList });
                 var usersForClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubIdWs + "|", StringComparison.Ordinal)).Select(k => k.Substring(clubIdWs.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
                 await WebSocketStore.SendAsync(ws, new { type = "users.list", users = usersForClub });
                 var detMem = usersForClub.OrderBy(u => u, StringComparer.Ordinal).Select(u => new StaffUser
@@ -115,24 +120,29 @@ public static class WebSocketMiddleware
                             await WebSocketStore.SendAsync(ws, new { type = "vip.snapshot", entries = entriesDbSw.OrderBy(e => e.CharacterName, StringComparer.Ordinal).ToArray() });
                             var djsDbSw = await efSvcWs2.LoadDjEntriesAsync(newClub) ?? Array.Empty<DjEntry>();
                             await WebSocketStore.SendAsync(ws, new { type = "dj.snapshot", entries = djsDbSw.OrderBy(e => e.DjName, StringComparer.Ordinal).ToArray() });
-                            var usersDb = await efSvcWs2.GetStaffUsersAsync(newClub);
-                            await WebSocketStore.SendAsync(ws, new { type = "users.list", users = usersDb.Select(u => u.Username).OrderBy(u => u, StringComparer.Ordinal).ToArray() });
-                            await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDb.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Job = u.Job, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid }).ToArray() });
-                            var jobsDb = await efSvcWs2.GetJobsAsync(newClub);
-                            await WebSocketStore.SendAsync(ws, new { type = "jobs.list", jobs = jobsDb });
-                            var rightsDb = await efSvcWs2.GetJobRightsAsync(newClub);
-                            await WebSocketStore.SendAsync(ws, new { type = "jobs.rights", rights = rightsDb });
-                            var logoSw = await efSvcWs2.GetClubLogoAsync(newClub);
-                            await WebSocketStore.SendAsync(ws, new { type = "club.logo", clubId = newClub, logoBase64 = logoSw ?? string.Empty });
+                        var usersDb = await efSvcWs2.GetStaffUsersAsync(newClub);
+                        await WebSocketStore.SendAsync(ws, new { type = "users.list", users = usersDb.Select(u => u.Username).OrderBy(u => u, StringComparer.Ordinal).ToArray() });
+                        await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDb.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Job = u.Job, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid }).ToArray() });
+                        var jobsDb = await efSvcWs2.GetJobsAsync(newClub);
+                        await WebSocketStore.SendAsync(ws, new { type = "jobs.list", jobs = jobsDb });
+                        var rightsDb = await efSvcWs2.GetJobRightsAsync(newClub);
+                        await WebSocketStore.SendAsync(ws, new { type = "jobs.rights", rights = rightsDb });
+                        var shiftsDbSw = await efSvcWs2.LoadShiftEntriesAsync(newClub) ?? Array.Empty<ShiftEntry>();
+                        await WebSocketStore.SendAsync(ws, new { type = "shift.snapshot", entries = shiftsDbSw.OrderBy(e => e.StartAt).ToArray() });
+                        var logoSw = await efSvcWs2.GetClubLogoAsync(newClub);
+                        await WebSocketStore.SendAsync(ws, new { type = "club.logo", clubId = newClub, logoBase64 = logoSw ?? string.Empty });
                         }
                         else
                         {
                             await WebSocketStore.SendAsync(ws, new { type = "vip.snapshot", entries = Array.Empty<VipEntry>() });
                             var djKeysSw = Store.DjEntries.Keys.Where(k => k.StartsWith(newClub + "|", StringComparison.Ordinal)).ToArray();
-                            var djListSw = djKeysSw.Select(k => Store.DjEntries.TryGetValue(k, out var e) ? e : null).Where(e => e != null).Select(e => e!).OrderBy(e => e.DjName, StringComparer.Ordinal).ToArray();
-                            await WebSocketStore.SendAsync(ws, new { type = "dj.snapshot", entries = djListSw });
-                            var usersClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(newClub + "|", StringComparison.Ordinal)).Select(k => k.Substring(newClub.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
-                            await WebSocketStore.SendAsync(ws, new { type = "users.list", users = usersClub });
+                        var djListSw = djKeysSw.Select(k => Store.DjEntries.TryGetValue(k, out var e) ? e : null).Where(e => e != null).Select(e => e!).OrderBy(e => e.DjName, StringComparer.Ordinal).ToArray();
+                        await WebSocketStore.SendAsync(ws, new { type = "dj.snapshot", entries = djListSw });
+                        var shiftKeysSw = Store.ShiftEntries.Keys.Where(k => k.StartsWith(newClub + "|", StringComparison.Ordinal)).ToArray();
+                        var shiftListSw = shiftKeysSw.Select(k => Store.ShiftEntries.TryGetValue(k, out var e) ? e : null).Where(e => e != null).Select(e => e!).OrderBy(e => e.StartAt).ToArray();
+                        await WebSocketStore.SendAsync(ws, new { type = "shift.snapshot", entries = shiftListSw });
+                        var usersClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(newClub + "|", StringComparison.Ordinal)).Select(k => k.Substring(newClub.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
+                        await WebSocketStore.SendAsync(ws, new { type = "users.list", users = usersClub });
                             var detMem2 = usersClub.OrderBy(u => u, StringComparer.Ordinal).Select(u => new StaffUser { Username = u, Job = (Store.ClubUserJobs.TryGetValue(newClub + "|" + u, out var j) ? j : "Unassigned"), Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow) }).ToArray();
                             await WebSocketStore.SendAsync(ws, new { type = "users.details", users = detMem2 });
                             await WebSocketStore.SendAsync(ws, new { type = "jobs.list", jobs = Store.JobRights.Keys.OrderBy(j => j, StringComparer.Ordinal).ToArray() });
@@ -362,7 +372,7 @@ public static class WebSocketMiddleware
                         if (string.Equals(name, "Owner", StringComparison.Ordinal))
                         {
                             var existing = Store.JobRights.TryGetValue(name, out var ex) ? ex : new Rights();
-                            existing.AddVip = true; existing.RemoveVip = true; existing.ManageUsers = true; existing.ManageJobs = true; existing.EditVipDuration = true; existing.AddDj = true; existing.RemoveDj = true; existing.Rank = 10;
+                            existing.AddVip = true; existing.RemoveVip = true; existing.ManageUsers = true; existing.ManageJobs = true; existing.EditVipDuration = true; existing.AddDj = true; existing.RemoveDj = true; existing.EditShiftPlan = true; existing.Rank = 10;
                             existing.ColorHex = rights.ColorHex ?? existing.ColorHex ?? "#FFFFFF";
                             existing.IconKey = rights.IconKey ?? existing.IconKey ?? "User";
                             Store.JobRights[name] = existing;
@@ -382,7 +392,7 @@ public static class WebSocketMiddleware
                             {
                                 var rightsDict = await efSvc.GetJobRightsAsync(clubIdCur);
                                 var ex = rightsDict.TryGetValue(name, out var exDb) ? exDb : new Rights();
-                                var merged = new Rights { AddVip = ex.AddVip, RemoveVip = ex.RemoveVip, ManageUsers = ex.ManageUsers, ManageJobs = ex.ManageJobs, EditVipDuration = ex.EditVipDuration, AddDj = true, RemoveDj = true, Rank = 10, ColorHex = rights.ColorHex ?? ex.ColorHex ?? "#FFFFFF", IconKey = rights.IconKey ?? ex.IconKey ?? "User" };
+                                var merged = new Rights { AddVip = ex.AddVip, RemoveVip = ex.RemoveVip, ManageUsers = ex.ManageUsers, ManageJobs = ex.ManageJobs, EditVipDuration = ex.EditVipDuration, AddDj = true, RemoveDj = true, EditShiftPlan = true, Rank = 10, ColorHex = rights.ColorHex ?? ex.ColorHex ?? "#FFFFFF", IconKey = rights.IconKey ?? ex.IconKey ?? "User" };
                                 await efSvc.UpdateJobRightsAsync(clubIdCur, name, merged);
                             }
                             else
@@ -830,6 +840,96 @@ public static class WebSocketMiddleware
                         app.Logger.LogDebug($"WS dj.update.ok club={clubIdCur} op={(type == "dj.add" ? "add" : "remove")} dj={entry.DjName}");
                         continue;
                     }
+                    if (type == "shift.add" || type == "shift.update" || type == "shift.remove")
+                    {
+                        var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
+                        var entryEl = root.TryGetProperty("entry", out var e) ? e : default;
+                        var clubIdCur = (WebSocketStore.TryGetClub(id, out var cc) && !string.IsNullOrWhiteSpace(cc)) ? cc! : "default";
+                        if ((type == "shift.remove" && !root.TryGetProperty("id", out var idEl)) && entryEl.ValueKind != JsonValueKind.Object) { await WebSocketStore.SendAsync(ws, new { type = "shift.update.fail" }); continue; }
+                        if (string.IsNullOrWhiteSpace(token)) { await WebSocketStore.SendAsync(ws, new { type = "shift.update.fail" }); continue; }
+                        if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = "shift.update.fail" }); continue; }
+                        ShiftEntry? entry = null;
+                        if (entryEl.ValueKind == JsonValueKind.Object)
+                        {
+                            entry = JsonSerializer.Deserialize<ShiftEntry>(entryEl.GetRawText(), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                        }
+                        Guid idRem = Guid.Empty;
+                        if (type == "shift.remove" && root.TryGetProperty("id", out var idEl2))
+                        {
+                            var idStr = idEl2.GetString() ?? string.Empty;
+                            Guid.TryParse(idStr, out idRem);
+                        }
+                        string job;
+                        Rights rights;
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEfRights = app.Services.CreateScope();
+                            var efSvcRights = scopeEfRights.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            var infoDb = await efSvcRights.GetStaffUserAsync(clubIdCur, username);
+                            job = infoDb?.Job ?? "Unassigned";
+                            var rightsDb = await efSvcRights.GetJobRightsAsync(clubIdCur);
+                            rights = rightsDb.TryGetValue(job, out var r) ? r : new Rights();
+                        }
+                        else
+                        {
+                            job = Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + username, out var j) ? j : "Unassigned";
+                            rights = Store.JobRights.TryGetValue(job, out var r) ? r : new Rights();
+                        }
+                        bool isOwner;
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEfOwner = app.Services.CreateScope();
+                            var efOwner = scopeEfOwner.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            var created = await efOwner.GetCreatedClubsAsync(username) ?? Array.Empty<string>();
+                            isOwner = Array.IndexOf(created, clubIdCur) >= 0;
+                        }
+                        else
+                        {
+                            isOwner = Store.CreatedClubs.TryGetValue(clubIdCur, out var ownerU) && string.Equals(ownerU, username, StringComparison.Ordinal);
+                        }
+                        var allowed = rights.EditShiftPlan || isOwner;
+                        if (!allowed) { await WebSocketStore.SendAsync(ws, new { type = "shift.update.fail" }); app.Logger.LogDebug($"WS shift.update.fail club={clubIdCur} reason=rights op={type} id={(entry?.Id.ToString() ?? idRem.ToString())}"); continue; }
+                        if (type == "shift.add" || type == "shift.update")
+                        {
+                            if (entry == null) { await WebSocketStore.SendAsync(ws, new { type = "shift.update.fail" }); continue; }
+                            if (!string.IsNullOrWhiteSpace(conn))
+                            {
+                                using var scopeEf = app.Services.CreateScope();
+                                var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                                entry = await efSvc.PersistAddOrUpdateShiftAsync(clubIdCur, entry);
+                            }
+                            else
+                            {
+                                var key = clubIdCur + "|" + (entry.Id == Guid.Empty ? Guid.NewGuid() : entry.Id);
+                                if (entry.Id == Guid.Empty) entry.Id = Guid.Parse(key.Substring(clubIdCur.Length + 1));
+                                Store.ShiftEntries[key] = entry;
+                                await Persistence.SaveAsync();
+                            }
+                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "shift.update", op = (type == "shift.add" ? "add" : "update"), entry });
+                            await WebSocketStore.SendAsync(ws, new { type = "shift.update.ok" });
+                            app.Logger.LogDebug($"WS shift.update.ok club={clubIdCur} op={(type == "shift.add" ? "add" : "update")} id={entry.Id}");
+                            continue;
+                        }
+                        else if (type == "shift.remove")
+                        {
+                            if (!string.IsNullOrWhiteSpace(conn))
+                            {
+                                using var scopeEf = app.Services.CreateScope();
+                                var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                                await efSvc.PersistRemoveShiftAsync(clubIdCur, idRem);
+                            }
+                            else
+                            {
+                                var key = clubIdCur + "|" + idRem.ToString();
+                                Store.ShiftEntries.TryRemove(key, out _);
+                                await Persistence.SaveAsync();
+                            }
+                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "shift.update", op = "remove", id = idRem });
+                            await WebSocketStore.SendAsync(ws, new { type = "shift.update.ok" });
+                            app.Logger.LogDebug($"WS shift.update.ok club={clubIdCur} op=remove id={idRem}");
+                            continue;
+                        }
+                    }
                     if (type == "club.logo.request")
                     {
                         var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
@@ -1109,6 +1209,7 @@ public static class WebSocketMiddleware
                             [nameof(Rights.EditVipDuration)[0].ToString().ToLowerInvariant() + nameof(Rights.EditVipDuration).Substring(1)] = rightsCur.EditVipDuration,
                             [nameof(Rights.AddDj)[0].ToString().ToLowerInvariant() + nameof(Rights.AddDj).Substring(1)] = rightsCur.AddDj,
                             [nameof(Rights.RemoveDj)[0].ToString().ToLowerInvariant() + nameof(Rights.RemoveDj).Substring(1)] = rightsCur.RemoveDj,
+                            [nameof(Rights.EditShiftPlan)[0].ToString().ToLowerInvariant() + nameof(Rights.EditShiftPlan).Substring(1)] = rightsCur.EditShiftPlan,
                         };
                         await WebSocketStore.SendAsync(ws, new { type = "user.self.rights", job = jobCur, rights = rightsObj });
                         continue;

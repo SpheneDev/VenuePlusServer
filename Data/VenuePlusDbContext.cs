@@ -12,6 +12,7 @@ public sealed class VenuePlusDbContext : DbContext
     public DbSet<ClubEntity> Clubs => Set<ClubEntity>();
     public DbSet<BaseUserEntity> BaseUsers => Set<BaseUserEntity>();
     public DbSet<DjEntryEntity> DjEntries => Set<DjEntryEntity>();
+    public DbSet<ShiftEntryEntity> Shifts => Set<ShiftEntryEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -22,5 +23,6 @@ public sealed class VenuePlusDbContext : DbContext
         modelBuilder.Entity<ClubEntity>().HasIndex(e => e.AccessKey).IsUnique().HasFilter("\"AccessKey\" IS NOT NULL");
         modelBuilder.Entity<BaseUserEntity>().HasIndex(e => e.Username).IsUnique();
         modelBuilder.Entity<DjEntryEntity>().HasIndex(e => new { e.ClubId, e.DjName }).IsUnique();
+        modelBuilder.Entity<ShiftEntryEntity>().HasIndex(e => new { e.ClubId, e.Id }).IsUnique();
     }
 }
