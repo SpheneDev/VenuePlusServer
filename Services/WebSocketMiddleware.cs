@@ -316,19 +316,20 @@ public static class WebSocketMiddleware
                         {
                             using var scopeEf = app.Services.CreateScope();
                             var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
-                            var created = await efSvc.GetCreatedClubsAsync(username) ?? Array.Empty<string>();
-                            isOwner = Array.IndexOf(created, clubReq) >= 0;
+                            isOwner = false;
                             var infoDb = await efSvc.GetStaffUserAsync(clubReq, username);
                             var rightsDb = await efSvc.GetJobRightsAsync(clubReq);
                             var job = infoDb?.Job ?? "Unassigned";
+                            isOwner = string.Equals(job, "Owner", StringComparison.Ordinal);
                             canManageJobs = rightsDb.TryGetValue(job, out var r) && r.ManageJobs;
                             if (!(isOwner || canManageJobs)) { await WebSocketStore.SendAsync(ws, new { type = "jobs.rights.fail" }); continue; }
                             await WebSocketStore.SendAsync(ws, new { type = "jobs.rights", rights = rightsDb });
                         }
                         else
                         {
-                            isOwner = Store.CreatedClubs.TryGetValue(clubReq, out var ownerU) && string.Equals(ownerU, username, StringComparison.Ordinal);
+                            isOwner = false;
                             var jobMem = Store.ClubUserJobs.TryGetValue(clubReq + "|" + username, out var j) ? j : "Unassigned";
+                            isOwner = string.Equals(jobMem, "Owner", StringComparison.Ordinal);
                             canManageJobs = Store.JobRights.TryGetValue(jobMem, out var rm) && rm.ManageJobs;
                             if (!(isOwner || canManageJobs)) { await WebSocketStore.SendAsync(ws, new { type = "jobs.rights.fail" }); continue; }
                             await WebSocketStore.SendAsync(ws, new { type = "jobs.rights", rights = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value) });
@@ -354,18 +355,19 @@ public static class WebSocketMiddleware
                         {
                             using var scopeEfChk = app.Services.CreateScope();
                             var efChk = scopeEfChk.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
-                            var created = await efChk.GetCreatedClubsAsync(username) ?? Array.Empty<string>();
-                            isOwner = Array.IndexOf(created, clubIdCur) >= 0;
+                            isOwner = false;
                             var infoDbChk = await efChk.GetStaffUserAsync(clubIdCur, username);
                             var rightsDbChk = await efChk.GetJobRightsAsync(clubIdCur);
                             var jobChk = infoDbChk?.Job ?? "Unassigned";
+                            isOwner = string.Equals(jobChk, "Owner", StringComparison.Ordinal);
                             canManageJobs = rightsDbChk.TryGetValue(jobChk, out var rChk) && rChk.ManageJobs;
                             if (!(isOwner || canManageJobs)) { await WebSocketStore.SendAsync(ws, new { type = "jobs.rights.fail" }); continue; }
                         }
                         else
                         {
-                            isOwner = Store.CreatedClubs.TryGetValue(clubIdCur, out var ownerU) && string.Equals(ownerU, username, StringComparison.Ordinal);
+                            isOwner = false;
                             var jobMemChk = Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + username, out var jChk) ? jChk : "Unassigned";
+                            isOwner = string.Equals(jobMemChk, "Owner", StringComparison.Ordinal);
                             canManageJobs = Store.JobRights.TryGetValue(jobMemChk, out var rmChk) && rmChk.ManageJobs;
                             if (!(isOwner || canManageJobs)) { await WebSocketStore.SendAsync(ws, new { type = "jobs.rights.fail" }); continue; }
                         }
@@ -435,11 +437,11 @@ public static class WebSocketMiddleware
                         {
                             using var scopeEfChk = app.Services.CreateScope();
                             var efChk = scopeEfChk.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
-                            var created = await efChk.GetCreatedClubsAsync(username) ?? Array.Empty<string>();
-                            isOwner = Array.IndexOf(created, clubIdCur) >= 0;
+                            isOwner = false;
                             var infoDbChk = await efChk.GetStaffUserAsync(clubIdCur, username);
                             var rightsDbChk = await efChk.GetJobRightsAsync(clubIdCur);
                             var jobChk = infoDbChk?.Job ?? "Unassigned";
+                            isOwner = string.Equals(jobChk, "Owner", StringComparison.Ordinal);
                             canManage = rightsDbChk.TryGetValue(jobChk, out var rChk) && rChk.ManageUsers;
                             if (!(isOwner || canManage)) { await WebSocketStore.SendAsync(ws, new { type = "user.delete.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.delete.fail club={clubIdCur} reason=rights target={targetUsername}"); continue; }
                             var targetInfo = await efChk.GetStaffUserAsync(clubIdCur, targetUsername);
@@ -458,6 +460,22 @@ public static class WebSocketMiddleware
                             var list = await efWs.GetStaffUsersAsync(clubIdCur) ?? Array.Empty<StaffUserInfo>();
                             await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.list", users = list.Select(u => u.Username).OrderBy(u => u, StringComparer.Ordinal).ToArray() });
                             await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.details", users = list.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Job = u.Job, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid }).ToArray() });
+                            var ownersOnlyUpd = list.Where(u => string.Equals(u.Job, "Owner", StringComparison.Ordinal)).Select(u => u.Username).ToArray();
+                            if (ownersOnlyUpd.Length == 1)
+                            {
+                                var loneOwnerUpd = ownersOnlyUpd[0];
+                                try { await efWs.SetClubCreatorAsync(clubIdCur, loneOwnerUpd); } catch { }
+                                Store.CreatedClubs[clubIdCur] = loneOwnerUpd;
+                                await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "access.owner.changed", clubId = clubIdCur, owner = loneOwnerUpd });
+                            }
+                            var ownersOnly = list.Where(u => string.Equals(u.Job, "Owner", StringComparison.Ordinal)).Select(u => u.Username).ToArray();
+                            if (ownersOnly.Length == 1)
+                            {
+                                var loneOwner = ownersOnly[0];
+                                try { await efWs.SetClubCreatorAsync(clubIdCur, loneOwner); } catch { }
+                                Store.CreatedClubs[clubIdCur] = loneOwner;
+                                await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "access.owner.changed", clubId = clubIdCur, owner = loneOwner });
+                            }
                         }
                         else
                         {
@@ -465,7 +483,7 @@ public static class WebSocketMiddleware
                             var targetJobMem = Store.ClubUserJobs.TryGetValue(jobKey, out var tjMem) ? tjMem : "Unassigned";
                             var jobMemChk = Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + username, out var jChk) ? jChk : "Unassigned";
                             var canManageMem = Store.JobRights.TryGetValue(jobMemChk, out var rmChk) && rmChk.ManageUsers;
-                            var isOwnerMem = Store.CreatedClubs.TryGetValue(clubIdCur, out var ownerUMem) && string.Equals(ownerUMem, username, StringComparison.Ordinal);
+                            var isOwnerMem = string.Equals(jobMemChk, "Owner", StringComparison.Ordinal);
                             if (!(isOwnerMem || canManageMem)) { await WebSocketStore.SendAsync(ws, new { type = "user.delete.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.delete.fail club={clubIdCur} reason=rights mem target={targetUsername}"); continue; }
                             var targetRightsMem = Store.JobRights.TryGetValue(targetJobMem, out var trMem) ? trMem : new Rights();
                             var actorRankDelMem = Store.JobRights.TryGetValue(jobMemChk, out var actorRightsDelMem) ? actorRightsDelMem.Rank : 1;
@@ -480,6 +498,22 @@ public static class WebSocketMiddleware
                             var users = usersClub.Select(u => new StaffUser { Username = u, Job = (Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + u, out var j2) ? j2 : "Unassigned"), Role = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info3) ? info3.CreatedAt : DateTimeOffset.UtcNow), Uid = (Store.StaffUsers.TryGetValue(u, out var info4) ? info4.Uid : u) }).ToArray();
                             await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.list", users = users.Select(x => x.Username).ToArray() });
                             await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.details", users });
+                            var ownersOnlyUpdMem = users.Where(x => string.Equals(x.Job, "Owner", StringComparison.Ordinal)).Select(x => x.Username).ToArray();
+                            if (ownersOnlyUpdMem.Length == 1)
+                            {
+                                var loneOwnerUpdMem = ownersOnlyUpdMem[0];
+                                Store.CreatedClubs[clubIdCur] = loneOwnerUpdMem;
+                                await Persistence.SaveAsync();
+                                await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "access.owner.changed", clubId = clubIdCur, owner = loneOwnerUpdMem });
+                            }
+                            var ownersOnlyMem = users.Where(x => string.Equals(x.Job, "Owner", StringComparison.Ordinal)).Select(x => x.Username).ToArray();
+                            if (ownersOnlyMem.Length == 1)
+                            {
+                                var loneOwnerMem = ownersOnlyMem[0];
+                                Store.CreatedClubs[clubIdCur] = loneOwnerMem;
+                                await Persistence.SaveAsync();
+                                await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "access.owner.changed", clubId = clubIdCur, owner = loneOwnerMem });
+                            }
                         }
                         await WebSocketStore.BroadcastAsync(new { type = "membership.removed", username = targetUsername, clubId = clubIdCur });
                         await WebSocketStore.SendAsync(ws, new { type = "user.delete.ok" });
@@ -501,11 +535,11 @@ public static class WebSocketMiddleware
                         {
                             using var scopeEfChk = app.Services.CreateScope();
                             var efChk = scopeEfChk.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
-                            var created = await efChk.GetCreatedClubsAsync(username) ?? Array.Empty<string>();
-                            isOwner = Array.IndexOf(created, clubIdCur) >= 0;
+                            isOwner = false;
                             var infoDbChk = await efChk.GetStaffUserAsync(clubIdCur, username);
                             var rightsDbChk = await efChk.GetJobRightsAsync(clubIdCur);
                             var jobChk = infoDbChk?.Job ?? "Unassigned";
+                            isOwner = string.Equals(jobChk, "Owner", StringComparison.Ordinal);
                             canManage = rightsDbChk.TryGetValue(jobChk, out var rChk) && rChk.ManageUsers;
                             var actorRank = rightsDbChk.TryGetValue(jobChk, out var actorRightsChk) ? actorRightsChk.Rank : 1;
                             if (!(isOwner || canManage)) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=rights target={targetUsername}"); continue; }
@@ -541,6 +575,14 @@ public static class WebSocketMiddleware
                             var list = await efWs.GetStaffUsersAsync(clubIdCur) ?? Array.Empty<StaffUserInfo>();
                             await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.list", users = list.Select(u => u.Username).OrderBy(u => u, StringComparer.Ordinal).ToArray() });
                             await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.details", users = list.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Job = u.Job, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid }).ToArray() });
+                            var ownersOnlyUpdReq = list.Where(u => string.Equals(u.Job, "Owner", StringComparison.Ordinal)).Select(u => u.Username).ToArray();
+                            if (ownersOnlyUpdReq.Length == 1)
+                            {
+                                var loneOwnerUpdReq = ownersOnlyUpdReq[0];
+                                try { await efWs.SetClubCreatorAsync(clubIdCur, loneOwnerUpdReq); } catch { }
+                                Store.CreatedClubs[clubIdCur] = loneOwnerUpdReq;
+                                await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "access.owner.changed", clubId = clubIdCur, owner = loneOwnerUpdReq });
+                            }
                         }
                         else
                         {
@@ -549,7 +591,7 @@ public static class WebSocketMiddleware
                             var jobMemChk = Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + username, out var jChk) ? jChk : "Unassigned";
                             var canManageMem = Store.JobRights.TryGetValue(jobMemChk, out var rmChk) && rmChk.ManageUsers;
                             var actorRankMem = Store.JobRights.TryGetValue(jobMemChk, out var actorRightsMem) ? actorRightsMem.Rank : 1;
-                            var isOwnerMem = Store.CreatedClubs.TryGetValue(clubIdCur, out var ownerU) && string.Equals(ownerU, username, StringComparison.Ordinal);
+                            var isOwnerMem = string.Equals(jobMemChk, "Owner", StringComparison.Ordinal);
                             if (!(isOwnerMem || canManageMem)) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=rights mem target={targetUsername}"); continue; }
                             var isSelfMem = string.Equals(targetUsername, username, StringComparison.Ordinal);
                             if (isSelfMem && !string.IsNullOrWhiteSpace(newJob) && !isOwnerMem)
@@ -607,18 +649,19 @@ public static class WebSocketMiddleware
                         {
                             using var scopeEfChk = app.Services.CreateScope();
                             var efChk = scopeEfChk.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
-                            var created = await efChk.GetCreatedClubsAsync(username) ?? Array.Empty<string>();
-                            isOwner = Array.IndexOf(created, clubIdCur) >= 0;
+                            isOwner = false;
                             var infoDbChk = await efChk.GetStaffUserAsync(clubIdCur, username);
                             var rightsDbChk = await efChk.GetJobRightsAsync(clubIdCur);
                             var jobChk = infoDbChk?.Job ?? "Unassigned";
+                            isOwner = string.Equals(jobChk, "Owner", StringComparison.Ordinal);
                             canManageJobs = rightsDbChk.TryGetValue(jobChk, out var rChk) && rChk.ManageJobs;
                             if (!(isOwner || canManageJobs)) { await WebSocketStore.SendAsync(ws, new { type = type == "job.add" ? "job.add.fail" : "job.delete.fail" }); continue; }
                         }
                         else
                         {
-                            isOwner = Store.CreatedClubs.TryGetValue(clubIdCur, out var ownerU) && string.Equals(ownerU, username, StringComparison.Ordinal);
+                            isOwner = false;
                             var jobMemChk = Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + username, out var jChk) ? jChk : "Unassigned";
+                            isOwner = string.Equals(jobMemChk, "Owner", StringComparison.Ordinal);
                             canManageJobs = Store.JobRights.TryGetValue(jobMemChk, out var rmChk) && rmChk.ManageJobs;
                             if (!(isOwner || canManageJobs)) { await WebSocketStore.SendAsync(ws, new { type = type == "job.add" ? "job.add.fail" : "job.delete.fail" }); continue; }
                         }
@@ -689,18 +732,7 @@ public static class WebSocketMiddleware
                             job = Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + username, out var j) ? j : "Unassigned";
                             rights = Store.JobRights.TryGetValue(job, out var r) ? r : new Rights();
                         }
-                        bool isOwner;
-                        if (!string.IsNullOrWhiteSpace(conn))
-                        {
-                            using var scopeEfOwner = app.Services.CreateScope();
-                            var efOwner = scopeEfOwner.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
-                            var created = await efOwner.GetCreatedClubsAsync(username) ?? Array.Empty<string>();
-                            isOwner = Array.IndexOf(created, clubIdCur) >= 0;
-                        }
-                        else
-                        {
-                            isOwner = Store.CreatedClubs.TryGetValue(clubIdCur, out var ownerU) && string.Equals(ownerU, username, StringComparison.Ordinal);
-                        }
+                        bool isOwner = string.Equals(job, "Owner", StringComparison.Ordinal);
                         if (type == "vip.add")
                         {
                             bool existsCur;
@@ -779,17 +811,7 @@ public static class WebSocketMiddleware
                             rights = Store.JobRights.TryGetValue(job, out var r) ? r : new Rights();
                         }
                         bool isOwner;
-                        if (!string.IsNullOrWhiteSpace(conn))
-                        {
-                            using var scopeEfOwner = app.Services.CreateScope();
-                            var efOwner = scopeEfOwner.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
-                            var created = await efOwner.GetCreatedClubsAsync(username) ?? Array.Empty<string>();
-                            isOwner = Array.IndexOf(created, clubIdCur) >= 0;
-                        }
-                        else
-                        {
-                            isOwner = Store.CreatedClubs.TryGetValue(clubIdCur, out var ownerU) && string.Equals(ownerU, username, StringComparison.Ordinal);
-                        }
+                        isOwner = string.Equals(job, "Owner", StringComparison.Ordinal);
                         var canAdd = rights.AddDj || isOwner;
                         var canRemove = rights.RemoveDj || isOwner;
                         var allowed = type == "dj.add" ? canAdd : canRemove;
@@ -876,17 +898,7 @@ public static class WebSocketMiddleware
                             rights = Store.JobRights.TryGetValue(job, out var r) ? r : new Rights();
                         }
                         bool isOwner;
-                        if (!string.IsNullOrWhiteSpace(conn))
-                        {
-                            using var scopeEfOwner = app.Services.CreateScope();
-                            var efOwner = scopeEfOwner.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
-                            var created = await efOwner.GetCreatedClubsAsync(username) ?? Array.Empty<string>();
-                            isOwner = Array.IndexOf(created, clubIdCur) >= 0;
-                        }
-                        else
-                        {
-                            isOwner = Store.CreatedClubs.TryGetValue(clubIdCur, out var ownerU) && string.Equals(ownerU, username, StringComparison.Ordinal);
-                        }
+                        isOwner = string.Equals(job, "Owner", StringComparison.Ordinal);
                         var allowed = rights.EditShiftPlan || isOwner;
                         if (!allowed) { await WebSocketStore.SendAsync(ws, new { type = "shift.update.fail" }); app.Logger.LogDebug($"WS shift.update.fail club={clubIdCur} reason=rights op={type} id={(entry?.Id.ToString() ?? idRem.ToString())}"); continue; }
                         if (type == "shift.add" || type == "shift.update")
@@ -989,12 +1001,14 @@ public static class WebSocketMiddleware
                         {
                             using var scopeEfChk = app.Services.CreateScope();
                             var efChk = scopeEfChk.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
-                            var created = await efChk.GetCreatedClubsAsync(username) ?? Array.Empty<string>();
-                            isOwner = Array.IndexOf(created, clubIdCur) >= 0;
+                            var infoDbChk = await efChk.GetStaffUserAsync(clubIdCur, username);
+                            var jobChk = infoDbChk?.Job ?? "Unassigned";
+                            isOwner = string.Equals(jobChk, "Owner", StringComparison.Ordinal);
                         }
                         else
                         {
-                            isOwner = Store.CreatedClubs.TryGetValue(clubIdCur, out var ownerU) && string.Equals(ownerU, username, StringComparison.Ordinal);
+                            var jobMem = Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + username, out var jm) ? jm : "Unassigned";
+                            isOwner = string.Equals(jobMem, "Owner", StringComparison.Ordinal);
                         }
                         if (!isOwner) { await WebSocketStore.SendAsync(ws, new { type = "club.logo.update.fail" }); continue; }
                         string? processed = null;
@@ -1042,12 +1056,14 @@ public static class WebSocketMiddleware
                         {
                             using var scopeEfChk = app.Services.CreateScope();
                             var efChk = scopeEfChk.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
-                            var created = await efChk.GetCreatedClubsAsync(username) ?? Array.Empty<string>();
-                            isOwner = Array.IndexOf(created, clubIdCur) >= 0;
+                            var infoDbChk = await efChk.GetStaffUserAsync(clubIdCur, username);
+                            var jobChk = infoDbChk?.Job ?? "Unassigned";
+                            isOwner = string.Equals(jobChk, "Owner", StringComparison.Ordinal);
                         }
                         else
                         {
-                            isOwner = Store.CreatedClubs.TryGetValue(clubIdCur, out var ownerU) && string.Equals(ownerU, username, StringComparison.Ordinal);
+                            var jobMem = Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + username, out var jm) ? jm : "Unassigned";
+                            isOwner = string.Equals(jobMem, "Owner", StringComparison.Ordinal);
                         }
                         if (!isOwner) { await WebSocketStore.SendAsync(ws, new { type = "club.logo.delete.fail", code = 403 }); continue; }
                         if (!string.IsNullOrWhiteSpace(conn))
@@ -1102,8 +1118,9 @@ public static class WebSocketMiddleware
                         {
                             using var scopeEf = app.Services.CreateScope();
                             var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
-                            var created = await efSvc.GetCreatedClubsAsync(username) ?? Array.Empty<string>();
-                            isOwner = Array.IndexOf(created, clubIdCur) >= 0;
+                            var infoDb = await efSvc.GetStaffUserAsync(clubIdCur, username);
+                            var jobChk = infoDb?.Job ?? "Unassigned";
+                            isOwner = string.Equals(jobChk, "Owner", StringComparison.Ordinal);
                             if (!isOwner) { await WebSocketStore.SendAsync(ws, new { type = "club.accesskey.regenerate.fail", code = 403 }); continue; }
                             var newKey = await efSvc.RegenerateAccessKeyAsync(clubIdCur);
                             if (string.IsNullOrWhiteSpace(newKey)) { await WebSocketStore.SendAsync(ws, new { type = "club.accesskey.regenerate.fail", code = 404 }); continue; }
@@ -1112,7 +1129,8 @@ public static class WebSocketMiddleware
                         }
                         else
                         {
-                            isOwner = Store.CreatedClubs.TryGetValue(clubIdCur, out var ownerU) && string.Equals(ownerU, username, StringComparison.Ordinal);
+                            var jobMem = Store.ClubUserJobs.TryGetValue(clubIdCur + "|" + username, out var jm) ? jm : "Unassigned";
+                            isOwner = string.Equals(jobMem, "Owner", StringComparison.Ordinal);
                             if (!isOwner) { await WebSocketStore.SendAsync(ws, new { type = "club.accesskey.regenerate.fail", code = 403 }); continue; }
                             var newKey = Util.NewUid(24);
                             Store.ClubAccessKeysByClub[clubIdCur] = newKey; Store.ClubAccessKeysByKey[newKey] = clubIdCur;

@@ -630,6 +630,19 @@ public sealed class EfStore
         return club?.JoinPasswordHash;
     }
 
+    public async Task SetClubCreatorAsync(string clubId, string newUsername)
+    {
+        var club = await _db.Clubs.FirstOrDefaultAsync(c => c.ClubId == clubId);
+        if (club == null)
+        {
+            club = new ClubEntity { ClubId = clubId, CreatedByUsername = string.Empty, CreatedAt = DateTimeOffset.UtcNow };
+            _db.Clubs.Add(club);
+        }
+        club.CreatedByUsername = _crypto.EncryptDeterministic(newUsername, "club:" + clubId);
+        _db.Clubs.Update(club);
+        await _db.SaveChangesAsync();
+    }
+
     public async Task<bool> AddStaffMembershipByUidAsync(string clubId, string targetUid, string job)
     {
         var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Uid == targetUid);
