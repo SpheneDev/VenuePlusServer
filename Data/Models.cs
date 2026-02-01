@@ -33,6 +33,7 @@ public sealed class StaffUser
 {
     public string Username { get; set; } = string.Empty;
     public DateTimeOffset? CreatedAt { get; set; }
+    public DateTimeOffset? Birthday { get; set; }
     public string[] Jobs { get; set; } = Array.Empty<string>();
     public string Role { get; set; } = "power";
     public string Uid { get; set; } = string.Empty;
@@ -47,6 +48,7 @@ public sealed class StaffUserInfo
     public string RecoveryCodeHash { get; set; } = string.Empty;
     public string[] Jobs { get; set; } = Array.Empty<string>();
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? Birthday { get; set; }
     public string Role { get; set; } = "power";
     public string Uid { get; set; } = string.Empty;
     public bool IsManual { get; set; }

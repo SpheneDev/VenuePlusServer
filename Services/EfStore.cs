@@ -277,7 +277,7 @@ public sealed class EfStore
         var jobs = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == baseUser.Uid).Select(x => x.JobName).ToArrayAsync();
         if (jobs.Length == 0) jobs = new[] { "Unassigned" };
         Array.Sort(jobs, StringComparer.Ordinal);
-        return new StaffUserInfo { Username = _crypto.DecryptString(baseUser.Username), PasswordHash = baseUser.PasswordHash, Jobs = jobs, Role = member.Role, CreatedAt = member.CreatedAt, Uid = baseUser.Uid };
+        return new StaffUserInfo { Username = _crypto.DecryptString(baseUser.Username), PasswordHash = baseUser.PasswordHash, Jobs = jobs, Role = member.Role, CreatedAt = member.CreatedAt, Uid = baseUser.Uid, Birthday = baseUser.Birthday };
     }
 
     public async Task<StaffUserInfo?> GetStaffUserByUsernameAsync(string username)
@@ -285,7 +285,7 @@ public sealed class EfStore
         var buList = await _db.BaseUsers.ToListAsync();
         var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
         if (baseUser == null) return null;
-        return new StaffUserInfo { Username = _crypto.DecryptString(baseUser.Username), PasswordHash = baseUser.PasswordHash, Jobs = Array.Empty<string>(), Role = "power", CreatedAt = baseUser.CreatedAt, Uid = baseUser.Uid };
+        return new StaffUserInfo { Username = _crypto.DecryptString(baseUser.Username), PasswordHash = baseUser.PasswordHash, Jobs = Array.Empty<string>(), Role = "power", CreatedAt = baseUser.CreatedAt, Uid = baseUser.Uid, Birthday = baseUser.Birthday };
     }
 
     public async Task<string?> GetUsernameByUidAsync(string uid)
@@ -310,6 +310,11 @@ public sealed class EfStore
             }
             if (!userJobs.Contains(j.JobName)) userJobs.Add(j.JobName);
         }
+        DateTimeOffset? GetBirthday(StaffUserEntity entry)
+        {
+            if (entry.IsManual) return null;
+            return baseUsers.TryGetValue(entry.UserUid, out var bu) ? bu.Birthday : null;
+        }
         string GetDisplayName(StaffUserEntity entry)
         {
             if (entry.IsManual) return string.IsNullOrWhiteSpace(entry.DisplayName) ? entry.UserUid : entry.DisplayName;
@@ -328,7 +333,8 @@ public sealed class EfStore
             Role = u.Role,
             CreatedAt = u.CreatedAt,
             Uid = u.UserUid,
-            IsManual = u.IsManual
+            IsManual = u.IsManual,
+            Birthday = GetBirthday(u)
         }).ToArray();
     }
 
@@ -347,7 +353,8 @@ public sealed class EfStore
             Role = entry.Role,
             CreatedAt = entry.CreatedAt,
             Uid = entry.UserUid,
-            IsManual = true
+            IsManual = true,
+            Birthday = null
         };
     }
 
@@ -368,7 +375,8 @@ public sealed class EfStore
             Role = member.Role,
             CreatedAt = member.CreatedAt,
             Uid = member.UserUid,
-            IsManual = member.IsManual
+            IsManual = member.IsManual,
+            Birthday = baseUser?.Birthday
         };
     }
 
@@ -414,7 +422,8 @@ public sealed class EfStore
             Role = "power",
             CreatedAt = now,
             Uid = uid,
-            IsManual = true
+            IsManual = true,
+            Birthday = null
         };
     }
 
@@ -579,6 +588,27 @@ public sealed class EfStore
         manual.Role = role;
         _db.StaffUsers.Update(manual);
         await _db.SaveChangesAsync();
+    }
+
+    public async Task<DateTimeOffset?> GetUserBirthdayAsync(string username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return null;
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
+        return baseUser?.Birthday;
+    }
+
+    public async Task<bool> UpdateUserBirthdayAsync(string username, DateTimeOffset? birthday)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return false;
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
+        if (baseUser == null) return false;
+        var normalized = birthday.HasValue ? birthday.Value.ToUniversalTime() : (DateTimeOffset?)null;
+        baseUser.Birthday = normalized;
+        _db.BaseUsers.Update(baseUser);
+        await _db.SaveChangesAsync();
+        return true;
     }
 
     public async Task UpdateStaffPasswordAsync(string clubId, string username, string newHash)

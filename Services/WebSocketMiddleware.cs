@@ -117,7 +117,7 @@ public static class WebSocketMiddleware
     private static object BuildStaffUserPayload(StaffUserInfo info, System.Collections.Generic.Dictionary<string, Rights> rightsMap)
     {
         var jobs = EnsureJobs(info.Jobs);
-        return new { Username = info.Username, Jobs = jobs, Job = GetPrimaryJob(rightsMap, jobs), Role = info.Role, CreatedAt = info.CreatedAt, Uid = info.Uid, IsManual = info.IsManual, IsOnline = IsUserOnline(info.Username) };
+        return new { Username = info.Username, Jobs = jobs, Job = GetPrimaryJob(rightsMap, jobs), Role = info.Role, CreatedAt = info.CreatedAt, Uid = info.Uid, IsManual = info.IsManual, IsOnline = IsUserOnline(info.Username), Birthday = info.Birthday };
     }
 
     private static object BuildStaffUserPayloadFromStore(string clubId, string username, System.Collections.Generic.Dictionary<string, Rights> rightsMap)
@@ -128,7 +128,8 @@ public static class WebSocketMiddleware
         var createdAt = info?.CreatedAt ?? DateTimeOffset.UtcNow;
         var uid = !string.IsNullOrWhiteSpace(info?.Uid) ? info!.Uid : username;
         var isManual = info?.IsManual ?? false;
-        return new { Username = username, Jobs = jobs, Job = GetPrimaryJob(rightsMap, jobs), Role = role, CreatedAt = createdAt, Uid = uid, IsManual = isManual, IsOnline = IsUserOnline(username) };
+        var birthday = info?.Birthday;
+        return new { Username = username, Jobs = jobs, Job = GetPrimaryJob(rightsMap, jobs), Role = role, CreatedAt = createdAt, Uid = uid, IsManual = isManual, IsOnline = IsUserOnline(username), Birthday = birthday };
     }
 
     private static bool IsUserOnline(string username)
@@ -291,7 +292,7 @@ public static class WebSocketMiddleware
                             await WebSocketStore.SendAsync(ws, new { type = "dj.snapshot", entries = djsDbSw.OrderBy(e => e.DjName, StringComparer.Ordinal).ToArray() });
                         var usersDb = await efSvcWs2.GetStaffUsersAsync(newClub);
                         await WebSocketStore.SendAsync(ws, new { type = "users.list", users = usersDb.Select(u => u.Username).OrderBy(u => u, StringComparer.Ordinal).ToArray() });
-                        await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDb.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual, IsOnline = IsUserOnline(u.Username) }).ToArray() });
+                        await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDb.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual, IsOnline = IsUserOnline(u.Username), Birthday = u.Birthday }).ToArray() });
                         var jobsDb = await efSvcWs2.GetJobsAsync(newClub);
                         await WebSocketStore.SendAsync(ws, new { type = "jobs.list", jobs = jobsDb });
                         var rightsDb = await efSvcWs2.GetJobRightsAsync(newClub);
@@ -312,7 +313,7 @@ public static class WebSocketMiddleware
                         await WebSocketStore.SendAsync(ws, new { type = "shift.snapshot", entries = shiftListSw });
                         var usersClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(newClub + "|", StringComparison.Ordinal)).Select(k => k.Substring(newClub.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
                         await WebSocketStore.SendAsync(ws, new { type = "users.list", users = usersClub });
-                            var detMem2 = usersClub.OrderBy(u => u, StringComparer.Ordinal).Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(newClub, u), Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow), IsManual = (Store.StaffUsers.TryGetValue(u, out var info3) && info3 != null && info3.IsManual), IsOnline = IsUserOnline(u) }).ToArray();
+                            var detMem2 = usersClub.OrderBy(u => u, StringComparer.Ordinal).Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(newClub, u), Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow), IsManual = (Store.StaffUsers.TryGetValue(u, out var info3) && info3 != null && info3.IsManual), IsOnline = IsUserOnline(u), Birthday = (Store.StaffUsers.TryGetValue(u, out var info4) ? info4.Birthday : null) }).ToArray();
                             await WebSocketStore.SendAsync(ws, new { type = "users.details", users = detMem2 });
                             await WebSocketStore.SendAsync(ws, new { type = "jobs.list", jobs = Store.JobRights.Keys.OrderBy(j => j, StringComparer.Ordinal).ToArray() });
                             await WebSocketStore.SendAsync(ws, new { type = "jobs.rights", rights = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value) });
@@ -346,6 +347,7 @@ public static class WebSocketMiddleware
                         var token = Util.NewToken();
                         Store.StaffSessions[token] = username;
                         Store.StaffSessionExpiry[token] = DateTimeOffset.UtcNow.AddHours(8);
+                        WebSocketStore.AddSession(id, token);
                         await WebSocketStore.SendAsync(ws, new { type = "login.ok", token });
                         app.Logger.LogDebug($"WS login.ok user={username} club={clubIdLogin}");
                         if (!string.IsNullOrWhiteSpace(conn))
@@ -419,6 +421,7 @@ public static class WebSocketMiddleware
                         Store.StaffSessions.TryGetValue(token, out var logoutUser);
                         Store.StaffSessions.TryRemove(token, out _);
                         Store.StaffSessionExpiry.TryRemove(token, out _);
+                        WebSocketStore.RemoveSession(id, token);
                         await WebSocketStore.SendAsync(ws, new { type = "session.logout.ok" });
                         if (!string.IsNullOrWhiteSpace(logoutUser))
                         {
@@ -468,12 +471,12 @@ public static class WebSocketMiddleware
                             using var scopeEfU = app.Services.CreateScope();
                             var efU = scopeEfU.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
                             var usersDb = await efU.GetStaffUsersAsync(clubReq) ?? Array.Empty<StaffUserInfo>();
-                            await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDb.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual, IsOnline = IsUserOnline(u.Username) }).ToArray() });
+                            await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDb.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual, IsOnline = IsUserOnline(u.Username), Birthday = u.Birthday }).ToArray() });
                         }
                         else
                         {
                             var usersForClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubReq + "|", StringComparison.Ordinal)).Select(k => k.Substring(clubReq.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
-                            var detMem2 = usersForClub.OrderBy(u => u, StringComparer.Ordinal).Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(clubReq, u), Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow), Uid = (Store.StaffUsers.TryGetValue(u, out var info3) ? info3.Uid : u), IsManual = (Store.StaffUsers.TryGetValue(u, out var info4) && info4 != null && info4.IsManual), IsOnline = IsUserOnline(u) }).ToArray();
+                            var detMem2 = usersForClub.OrderBy(u => u, StringComparer.Ordinal).Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(clubReq, u), Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow), Uid = (Store.StaffUsers.TryGetValue(u, out var info3) ? info3.Uid : u), IsManual = (Store.StaffUsers.TryGetValue(u, out var info4) && info4 != null && info4.IsManual), IsOnline = IsUserOnline(u), Birthday = (Store.StaffUsers.TryGetValue(u, out var info5) ? info5.Birthday : null) }).ToArray();
                             await WebSocketStore.SendAsync(ws, new { type = "users.details", users = detMem2 });
                         }
                         continue;
@@ -1613,6 +1616,71 @@ public static class WebSocketMiddleware
                         }
                         continue;
                     }
+                    if (type == "user.self.birthday.request")
+                    {
+                        var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
+                        if (!Util.ValidateSession(token, out var usernameReq)) { await WebSocketStore.SendAsync(ws, new { type = "user.self.birthday", birthday = (DateTimeOffset?)null }); continue; }
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEf = app.Services.CreateScope();
+                            var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            var birthday = await efSvc.GetUserBirthdayAsync(usernameReq);
+                            await WebSocketStore.SendAsync(ws, new { type = "user.self.birthday", birthday });
+                        }
+                        else
+                        {
+                            DateTimeOffset? birthday = null;
+                            if (Store.StaffUsers.TryGetValue(usernameReq, out var infoMem) && infoMem != null) birthday = infoMem.Birthday;
+                            await WebSocketStore.SendAsync(ws, new { type = "user.self.birthday", birthday });
+                        }
+                        continue;
+                    }
+                    if (type == "user.self.birthday.set")
+                    {
+                        var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
+                        if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = "user.self.birthday.fail", code = 401 }); continue; }
+                        DateTimeOffset? birthday = null;
+                        if (root.TryGetProperty("birthday", out var b) && b.ValueKind != JsonValueKind.Null)
+                        {
+                            if (b.ValueKind == JsonValueKind.String)
+                            {
+                                if (DateTimeOffset.TryParse(b.GetString(), out var dt)) birthday = dt;
+                            }
+                        }
+                        if (birthday.HasValue) birthday = birthday.Value.ToUniversalTime();
+                        bool ok;
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEf = app.Services.CreateScope();
+                            var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            ok = await efSvc.UpdateUserBirthdayAsync(username, birthday);
+                            if (ok)
+                            {
+                                var clubs = await efSvc.GetUserClubsAsync(username);
+                                for (int i = 0; i < clubs.Length; i++)
+                                {
+                                    await BroadcastUsersDetailsForClubDbAsync(clubs[i], efSvc);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            ok = Store.StaffUsers.TryGetValue(username, out var info);
+                            if (ok && info != null)
+                            {
+                                info.Birthday = birthday;
+                                Store.StaffUsers[username] = info;
+                                await Persistence.SaveAsync();
+                                var clubs = GetUserClubsFromStore(username);
+                                for (int i = 0; i < clubs.Length; i++)
+                                {
+                                    await BroadcastUsersDetailsForClubMemAsync(clubs[i]);
+                                }
+                            }
+                        }
+                        await WebSocketStore.SendAsync(ws, new { type = ok ? "user.self.birthday.ok" : "user.self.birthday.fail", code = ok ? 200 : 400 });
+                        continue;
+                    }
                     if (type == "user.exists.request")
                     {
                         var usernameChk = root.TryGetProperty("username", out var u) ? (u.GetString() ?? string.Empty) : string.Empty;
@@ -2080,6 +2148,52 @@ public static class WebSocketMiddleware
             catch (Exception ex) { app.Logger.LogDebug($"WS handler error: {ex.Message}"); }
             finally
             {
+                var drainedTokens = WebSocketStore.DrainSessions(id);
+                if (drainedTokens.Length > 0)
+                {
+                    var affectedUsers = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
+                    for (int i = 0; i < drainedTokens.Length; i++)
+                    {
+                        var tok = drainedTokens[i];
+                        if (string.IsNullOrWhiteSpace(tok)) continue;
+                        if (Store.StaffSessions.TryRemove(tok, out var user))
+                        {
+                            Store.StaffSessionExpiry.TryRemove(tok, out _);
+                            if (!string.IsNullOrWhiteSpace(user)) affectedUsers.Add(user);
+                        }
+                        else
+                        {
+                            Store.StaffSessionExpiry.TryRemove(tok, out _);
+                        }
+                    }
+                    if (affectedUsers.Count > 0)
+                    {
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEf = app.Services.CreateScope();
+                            var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            foreach (var user in affectedUsers)
+                            {
+                                var clubs = await efSvc.GetUserClubsAsync(user) ?? Array.Empty<string>();
+                                for (int i = 0; i < clubs.Length; i++)
+                                {
+                                    await BroadcastUsersDetailsForClubDbAsync(clubs[i], efSvc);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            foreach (var user in affectedUsers)
+                            {
+                                var clubsMem = GetUserClubsFromStore(user);
+                                for (int i = 0; i < clubsMem.Length; i++)
+                                {
+                                    await BroadcastUsersDetailsForClubMemAsync(clubsMem[i]);
+                                }
+                            }
+                        }
+                    }
+                }
                 WebSocketStore.Remove(id);
                 try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", app.Lifetime.ApplicationStopping); } catch (Exception ex) { app.Logger.LogDebug($"WS close failed: {ex.Message}"); }
             }

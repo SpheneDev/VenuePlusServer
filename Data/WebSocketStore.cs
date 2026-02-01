@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -10,6 +11,7 @@ public static class WebSocketStore
 {
     private static readonly ConcurrentDictionary<Guid, WebSocket> Sockets = new();
     private static readonly ConcurrentDictionary<Guid, string> SocketClubs = new();
+    private static readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> SocketSessions = new();
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     public static void Add(Guid id, WebSocket ws, string clubId)
@@ -33,6 +35,28 @@ public static class WebSocketStore
     {
         Sockets.TryRemove(id, out _);
         SocketClubs.TryRemove(id, out _);
+        SocketSessions.TryRemove(id, out _);
+    }
+
+    public static void AddSession(Guid id, string token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return;
+        var set = SocketSessions.GetOrAdd(id, _ => new ConcurrentDictionary<string, byte>(StringComparer.Ordinal));
+        set[token] = 1;
+    }
+
+    public static void RemoveSession(Guid id, string token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return;
+        if (!SocketSessions.TryGetValue(id, out var set)) return;
+        set.TryRemove(token, out _);
+        if (set.IsEmpty) SocketSessions.TryRemove(id, out _);
+    }
+
+    public static string[] DrainSessions(Guid id)
+    {
+        if (!SocketSessions.TryRemove(id, out var set)) return Array.Empty<string>();
+        return set.Keys.ToArray();
     }
 
     public static async System.Threading.Tasks.Task BroadcastAsync(object message)
@@ -73,6 +97,7 @@ public static class WebSocketStore
             try { await System.Threading.Tasks.Task.Delay(100); } catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"WS delay failed: {ex.Message}"); }
             Sockets.TryRemove(kv.Key, out _);
             SocketClubs.TryRemove(kv.Key, out _);
+            SocketSessions.TryRemove(kv.Key, out _);
             try { ws.Dispose(); } catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"WS dispose failed: {ex.Message}"); }
         }
     }
