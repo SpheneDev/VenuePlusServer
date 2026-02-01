@@ -310,15 +310,169 @@ public sealed class EfStore
             }
             if (!userJobs.Contains(j.JobName)) userJobs.Add(j.JobName);
         }
-        return list.OrderBy(x => baseUsers.TryGetValue(x.UserUid, out var bu) ? _crypto.DecryptString(bu.Username) : x.UserUid, StringComparer.Ordinal).Select(u => new StaffUserInfo
+        string GetDisplayName(StaffUserEntity entry)
         {
-            Username = (baseUsers.TryGetValue(u.UserUid, out var bu) ? _crypto.DecryptString(bu.Username) : u.UserUid),
-            PasswordHash = (baseUsers.TryGetValue(u.UserUid, out var bu2) ? bu2.PasswordHash : string.Empty),
+            if (entry.IsManual) return string.IsNullOrWhiteSpace(entry.DisplayName) ? entry.UserUid : entry.DisplayName;
+            if (baseUsers.TryGetValue(entry.UserUid, out var bu)) return _crypto.DecryptString(bu.Username);
+            return entry.UserUid;
+        }
+        string GetPasswordHash(StaffUserEntity entry)
+        {
+            return baseUsers.TryGetValue(entry.UserUid, out var bu) ? bu.PasswordHash : string.Empty;
+        }
+        return list.OrderBy(x => GetDisplayName(x), StringComparer.Ordinal).Select(u => new StaffUserInfo
+        {
+            Username = GetDisplayName(u),
+            PasswordHash = GetPasswordHash(u),
             Jobs = GetSortedJobs(jobsByUser, u.UserUid),
             Role = u.Role,
             CreatedAt = u.CreatedAt,
-            Uid = u.UserUid
+            Uid = u.UserUid,
+            IsManual = u.IsManual
         }).ToArray();
+    }
+
+    public async Task<StaffUserInfo?> GetManualStaffUserAsync(string clubId, string displayName)
+    {
+        var entry = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.IsManual && x.DisplayName == displayName);
+        if (entry == null) return null;
+        var jobs = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == entry.UserUid).Select(x => x.JobName).ToArrayAsync();
+        if (jobs.Length == 0) jobs = new[] { "Unassigned" };
+        Array.Sort(jobs, StringComparer.Ordinal);
+        return new StaffUserInfo
+        {
+            Username = string.IsNullOrWhiteSpace(entry.DisplayName) ? entry.UserUid : entry.DisplayName,
+            PasswordHash = string.Empty,
+            Jobs = jobs,
+            Role = entry.Role,
+            CreatedAt = entry.CreatedAt,
+            Uid = entry.UserUid,
+            IsManual = true
+        };
+    }
+
+    public async Task<StaffUserInfo?> GetStaffUserByUidAsync(string clubId, string uid)
+    {
+        var member = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.UserUid == uid);
+        if (member == null) return null;
+        var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Uid == uid);
+        var jobs = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == uid).Select(x => x.JobName).ToArrayAsync();
+        if (jobs.Length == 0) jobs = new[] { "Unassigned" };
+        Array.Sort(jobs, StringComparer.Ordinal);
+        var name = member.IsManual ? (string.IsNullOrWhiteSpace(member.DisplayName) ? member.UserUid : member.DisplayName) : (baseUser == null ? member.UserUid : _crypto.DecryptString(baseUser.Username));
+        return new StaffUserInfo
+        {
+            Username = name,
+            PasswordHash = baseUser?.PasswordHash ?? string.Empty,
+            Jobs = jobs,
+            Role = member.Role,
+            CreatedAt = member.CreatedAt,
+            Uid = member.UserUid,
+            IsManual = member.IsManual
+        };
+    }
+
+    public async Task<StaffUserInfo?> CreateManualStaffEntryAsync(string clubId, string displayName, string[] jobs)
+    {
+        if (string.IsNullOrWhiteSpace(displayName)) return null;
+        var name = displayName.Trim();
+        var existingManual = await _db.StaffUsers.AnyAsync(x => x.ClubId == clubId && x.IsManual && x.DisplayName == name);
+        if (existingManual) return null;
+        var buList = await _db.BaseUsers.ToListAsync();
+        var existsBase = buList.Any(x => string.Equals(_crypto.DecryptString(x.Username), name, StringComparison.Ordinal));
+        if (existsBase) return null;
+        string uid;
+        do
+        {
+            uid = Util.NewUid();
+        } while (await _db.BaseUsers.AnyAsync(x => x.Uid == uid) || await _db.StaffUsers.AnyAsync(x => x.ClubId == clubId && x.UserUid == uid));
+        var now = DateTimeOffset.UtcNow;
+        _db.StaffUsers.Add(new StaffUserEntity
+        {
+            ClubId = clubId,
+            UserUid = uid,
+            Role = "power",
+            CreatedAt = now,
+            IsManual = true,
+            DisplayName = name
+        });
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var job in jobs)
+        {
+            if (string.IsNullOrWhiteSpace(job)) continue;
+            if (set.Add(job)) _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = uid, JobName = job });
+        }
+        if (set.Count == 0) _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = uid, JobName = "Unassigned" });
+        await _db.SaveChangesAsync();
+        var arr = set.Count == 0 ? new[] { "Unassigned" } : set.ToArray();
+        Array.Sort(arr, StringComparer.Ordinal);
+        return new StaffUserInfo
+        {
+            Username = name,
+            PasswordHash = string.Empty,
+            Jobs = arr,
+            Role = "power",
+            CreatedAt = now,
+            Uid = uid,
+            IsManual = true
+        };
+    }
+
+    public async Task<StaffUserInfo?> LinkManualStaffEntryAsync(string clubId, string manualUid, string targetUid)
+    {
+        if (string.IsNullOrWhiteSpace(manualUid) || string.IsNullOrWhiteSpace(targetUid)) return null;
+        var manual = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.UserUid == manualUid && x.IsManual);
+        if (manual == null) return null;
+        var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Uid == targetUid);
+        if (baseUser == null) return null;
+        var manualJobs = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == manualUid).ToListAsync();
+        var targetEntry = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.UserUid == targetUid);
+        if (targetEntry == null)
+        {
+            targetEntry = new StaffUserEntity
+            {
+                ClubId = clubId,
+                UserUid = targetUid,
+                Role = manual.Role,
+                CreatedAt = manual.CreatedAt,
+                IsManual = false,
+                DisplayName = null
+            };
+            _db.StaffUsers.Add(targetEntry);
+        }
+        else
+        {
+            targetEntry.Role = manual.Role;
+            targetEntry.IsManual = false;
+            targetEntry.DisplayName = null;
+            targetEntry.CreatedAt = manual.CreatedAt;
+            _db.StaffUsers.Update(targetEntry);
+        }
+        var existingTargetJobs = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == targetUid).ToListAsync();
+        if (existingTargetJobs.Count > 0) _db.StaffUserJobs.RemoveRange(existingTargetJobs);
+        var jobSet = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var j in manualJobs)
+        {
+            if (string.IsNullOrWhiteSpace(j.JobName)) continue;
+            if (jobSet.Add(j.JobName)) _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = targetUid, JobName = j.JobName });
+        }
+        if (jobSet.Count == 0) _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = targetUid, JobName = "Unassigned" });
+        _db.StaffUsers.Remove(manual);
+        if (manualJobs.Count > 0) _db.StaffUserJobs.RemoveRange(manualJobs);
+        await _db.SaveChangesAsync();
+        var username = _crypto.DecryptString(baseUser.Username);
+        var jobArr = jobSet.Count == 0 ? new[] { "Unassigned" } : jobSet.ToArray();
+        Array.Sort(jobArr, StringComparer.Ordinal);
+        return new StaffUserInfo
+        {
+            Username = username,
+            PasswordHash = baseUser.PasswordHash,
+            Jobs = jobArr,
+            Role = targetEntry.Role,
+            CreatedAt = targetEntry.CreatedAt,
+            Uid = targetUid,
+            IsManual = false
+        };
     }
 
     public async Task CreateStaffUserAsync(string clubId, string username, string passwordHash)
@@ -353,31 +507,55 @@ public sealed class EfStore
     {
         var buList = await _db.BaseUsers.ToListAsync();
         var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
-        if (baseUser == null) return;
-        var u = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.UserUid == baseUser.Uid);
-        if (u != null)
+        if (baseUser != null)
         {
-            _db.StaffUsers.Remove(u);
-            var jobs = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == baseUser.Uid).ToListAsync();
-            if (jobs.Count > 0) _db.StaffUserJobs.RemoveRange(jobs);
-            await _db.SaveChangesAsync();
+            var u = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.UserUid == baseUser.Uid);
+            if (u != null)
+            {
+                _db.StaffUsers.Remove(u);
+                var jobs = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == baseUser.Uid).ToListAsync();
+                if (jobs.Count > 0) _db.StaffUserJobs.RemoveRange(jobs);
+                await _db.SaveChangesAsync();
+            }
+            return;
         }
+        var manual = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.IsManual && x.DisplayName == username);
+        if (manual == null) return;
+        _db.StaffUsers.Remove(manual);
+        var manualJobs = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == manual.UserUid).ToListAsync();
+        if (manualJobs.Count > 0) _db.StaffUserJobs.RemoveRange(manualJobs);
+        await _db.SaveChangesAsync();
     }
 
     public async Task UpdateStaffUserJobsAsync(string clubId, string username, string[] jobs)
     {
         var buList = await _db.BaseUsers.ToListAsync();
         var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
-        if (baseUser == null) return;
-        var existing = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == baseUser.Uid).ToListAsync();
-        if (existing.Count > 0) _db.StaffUserJobs.RemoveRange(existing);
-        var set = new HashSet<string>(StringComparer.Ordinal);
+        if (baseUser != null)
+        {
+            var existing = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == baseUser.Uid).ToListAsync();
+            if (existing.Count > 0) _db.StaffUserJobs.RemoveRange(existing);
+            var set = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var job in jobs)
+            {
+                if (string.IsNullOrWhiteSpace(job)) continue;
+                if (set.Add(job)) _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = baseUser.Uid, JobName = job });
+            }
+            if (set.Count == 0) _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = baseUser.Uid, JobName = "Unassigned" });
+            await _db.SaveChangesAsync();
+            return;
+        }
+        var manual = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.IsManual && x.DisplayName == username);
+        if (manual == null) return;
+        var existingManual = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == manual.UserUid).ToListAsync();
+        if (existingManual.Count > 0) _db.StaffUserJobs.RemoveRange(existingManual);
+        var setManual = new HashSet<string>(StringComparer.Ordinal);
         foreach (var job in jobs)
         {
             if (string.IsNullOrWhiteSpace(job)) continue;
-            if (set.Add(job)) _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = baseUser.Uid, JobName = job });
+            if (setManual.Add(job)) _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = manual.UserUid, JobName = job });
         }
-        if (set.Count == 0) _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = baseUser.Uid, JobName = "Unassigned" });
+        if (setManual.Count == 0) _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = manual.UserUid, JobName = "Unassigned" });
         await _db.SaveChangesAsync();
     }
 
@@ -385,14 +563,22 @@ public sealed class EfStore
     {
         var buList = await _db.BaseUsers.ToListAsync();
         var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
-        if (baseUser == null) return;
-        var u = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.UserUid == baseUser.Uid);
-        if (u != null)
+        if (baseUser != null)
         {
-            u.Role = role;
-            _db.StaffUsers.Update(u);
-            await _db.SaveChangesAsync();
+            var u = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.UserUid == baseUser.Uid);
+            if (u != null)
+            {
+                u.Role = role;
+                _db.StaffUsers.Update(u);
+                await _db.SaveChangesAsync();
+            }
+            return;
         }
+        var manual = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.IsManual && x.DisplayName == username);
+        if (manual == null) return;
+        manual.Role = role;
+        _db.StaffUsers.Update(manual);
+        await _db.SaveChangesAsync();
     }
 
     public async Task UpdateStaffPasswordAsync(string clubId, string username, string newHash)

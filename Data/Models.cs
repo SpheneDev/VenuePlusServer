@@ -36,6 +36,7 @@ public sealed class StaffUser
     public string[] Jobs { get; set; } = Array.Empty<string>();
     public string Role { get; set; } = "power";
     public string Uid { get; set; } = string.Empty;
+    public bool IsManual { get; set; }
 }
 
 public sealed class StaffUserInfo
@@ -47,6 +48,7 @@ public sealed class StaffUserInfo
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public string Role { get; set; } = "power";
     public string Uid { get; set; } = string.Empty;
+    public bool IsManual { get; set; }
 }
 
 public sealed class Rights

@@ -32,6 +32,9 @@ public sealed class StaffUserEntity
     [Required]
     [MaxLength(15)]
     public string UserUid { get; set; } = string.Empty;
+    [MaxLength(128)]
+    public string? DisplayName { get; set; }
+    public bool IsManual { get; set; }
     [Required]
     [MaxLength(64)]
     public string Role { get; set; } = "power";

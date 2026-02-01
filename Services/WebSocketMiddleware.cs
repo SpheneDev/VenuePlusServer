@@ -117,7 +117,7 @@ public static class WebSocketMiddleware
     private static object BuildStaffUserPayload(StaffUserInfo info, System.Collections.Generic.Dictionary<string, Rights> rightsMap)
     {
         var jobs = EnsureJobs(info.Jobs);
-        return new { Username = info.Username, Jobs = jobs, Job = GetPrimaryJob(rightsMap, jobs), Role = info.Role, CreatedAt = info.CreatedAt, Uid = info.Uid };
+        return new { Username = info.Username, Jobs = jobs, Job = GetPrimaryJob(rightsMap, jobs), Role = info.Role, CreatedAt = info.CreatedAt, Uid = info.Uid, IsManual = info.IsManual };
     }
 
     private static object BuildStaffUserPayloadFromStore(string clubId, string username, System.Collections.Generic.Dictionary<string, Rights> rightsMap)
@@ -127,7 +127,8 @@ public static class WebSocketMiddleware
         var role = info?.Role ?? "power";
         var createdAt = info?.CreatedAt ?? DateTimeOffset.UtcNow;
         var uid = !string.IsNullOrWhiteSpace(info?.Uid) ? info!.Uid : username;
-        return new { Username = username, Jobs = jobs, Job = GetPrimaryJob(rightsMap, jobs), Role = role, CreatedAt = createdAt, Uid = uid };
+        var isManual = info?.IsManual ?? false;
+        return new { Username = username, Jobs = jobs, Job = GetPrimaryJob(rightsMap, jobs), Role = role, CreatedAt = createdAt, Uid = uid, IsManual = isManual };
     }
 
     public static void Use(WebApplication app, string? conn)
@@ -163,7 +164,7 @@ public static class WebSocketMiddleware
                 await WebSocketStore.SendAsync(ws, new { type = "shift.snapshot", entries = shiftsDb.OrderBy(e => e.StartAt).ToArray() });
                 var usersDbInit = await efSvcWs.GetStaffUsersAsync(clubIdWs) ?? Array.Empty<StaffUserInfo>();
                 await WebSocketStore.SendAsync(ws, new { type = "users.list", users = usersDbInit.Select(u => u.Username).OrderBy(u => u, StringComparer.Ordinal).ToArray() });
-                await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDbInit.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid }).ToArray() });
+                await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDbInit.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual }).ToArray() });
                 var jobsDbInit = await efSvcWs.GetJobsAsync(clubIdWs) ?? Array.Empty<string>();
                 await WebSocketStore.SendAsync(ws, new { type = "jobs.list", jobs = jobsDbInit });
                 var rightsDbInit = await efSvcWs.GetJobRightsAsync(clubIdWs);
@@ -237,7 +238,7 @@ public static class WebSocketMiddleware
                             await WebSocketStore.SendAsync(ws, new { type = "dj.snapshot", entries = djsDbSw.OrderBy(e => e.DjName, StringComparer.Ordinal).ToArray() });
                         var usersDb = await efSvcWs2.GetStaffUsersAsync(newClub);
                         await WebSocketStore.SendAsync(ws, new { type = "users.list", users = usersDb.Select(u => u.Username).OrderBy(u => u, StringComparer.Ordinal).ToArray() });
-                        await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDb.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid }).ToArray() });
+                        await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDb.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual }).ToArray() });
                         var jobsDb = await efSvcWs2.GetJobsAsync(newClub);
                         await WebSocketStore.SendAsync(ws, new { type = "jobs.list", jobs = jobsDb });
                         var rightsDb = await efSvcWs2.GetJobRightsAsync(newClub);
@@ -258,7 +259,7 @@ public static class WebSocketMiddleware
                         await WebSocketStore.SendAsync(ws, new { type = "shift.snapshot", entries = shiftListSw });
                         var usersClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(newClub + "|", StringComparison.Ordinal)).Select(k => k.Substring(newClub.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
                         await WebSocketStore.SendAsync(ws, new { type = "users.list", users = usersClub });
-                            var detMem2 = usersClub.OrderBy(u => u, StringComparer.Ordinal).Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(newClub, u), Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow) }).ToArray();
+                            var detMem2 = usersClub.OrderBy(u => u, StringComparer.Ordinal).Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(newClub, u), Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow), IsManual = (Store.StaffUsers.TryGetValue(u, out var info3) && info3 != null && info3.IsManual) }).ToArray();
                             await WebSocketStore.SendAsync(ws, new { type = "users.details", users = detMem2 });
                             await WebSocketStore.SendAsync(ws, new { type = "jobs.list", jobs = Store.JobRights.Keys.OrderBy(j => j, StringComparer.Ordinal).ToArray() });
                             await WebSocketStore.SendAsync(ws, new { type = "jobs.rights", rights = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value) });
@@ -394,12 +395,12 @@ public static class WebSocketMiddleware
                             using var scopeEfU = app.Services.CreateScope();
                             var efU = scopeEfU.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
                             var usersDb = await efU.GetStaffUsersAsync(clubReq) ?? Array.Empty<StaffUserInfo>();
-                            await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDb.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid }).ToArray() });
+                            await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDb.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual }).ToArray() });
                         }
                         else
                         {
                             var usersForClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubReq + "|", StringComparison.Ordinal)).Select(k => k.Substring(clubReq.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
-                            var detMem2 = usersForClub.OrderBy(u => u, StringComparer.Ordinal).Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(clubReq, u), Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow), Uid = (Store.StaffUsers.TryGetValue(u, out var info3) ? info3.Uid : u) }).ToArray();
+                            var detMem2 = usersForClub.OrderBy(u => u, StringComparer.Ordinal).Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(clubReq, u), Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow), Uid = (Store.StaffUsers.TryGetValue(u, out var info3) ? info3.Uid : u), IsManual = (Store.StaffUsers.TryGetValue(u, out var info4) && info4 != null && info4.IsManual) }).ToArray();
                             await WebSocketStore.SendAsync(ws, new { type = "users.details", users = detMem2 });
                         }
                         continue;
@@ -565,7 +566,7 @@ public static class WebSocketMiddleware
                             var efWs = scopeEfWs.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
                             var list = await efWs.GetStaffUsersAsync(clubIdCur) ?? Array.Empty<StaffUserInfo>();
                             await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.list", users = list.Select(u => u.Username).OrderBy(u => u, StringComparer.Ordinal).ToArray() });
-                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.details", users = list.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid }).ToArray() });
+                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.details", users = list.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual }).ToArray() });
                             var ownersOnlyUpd = list.Where(u => HasOwner(EnsureJobs(u.Jobs))).Select(u => u.Username).ToArray();
                             if (ownersOnlyUpd.Length == 1)
                             {
@@ -603,7 +604,7 @@ public static class WebSocketMiddleware
                             Store.ClubUserJobs.TryRemove(jobKey, out _);
                             await Persistence.SaveAsync();
                             var usersClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubIdCur + "|", StringComparison.Ordinal)).Select(k => k.Substring(clubIdCur.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
-                            var users = usersClub.Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(clubIdCur, u), Role = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info3) ? info3.CreatedAt : DateTimeOffset.UtcNow), Uid = (Store.StaffUsers.TryGetValue(u, out var info4) ? info4.Uid : u) }).ToArray();
+                            var users = usersClub.Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(clubIdCur, u), Role = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info3) ? info3.CreatedAt : DateTimeOffset.UtcNow), Uid = (Store.StaffUsers.TryGetValue(u, out var info4) ? info4.Uid : u), IsManual = (Store.StaffUsers.TryGetValue(u, out var info5) && info5 != null && info5.IsManual) }).ToArray();
                             await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.list", users = users.Select(x => x.Username).ToArray() });
                             await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.details", users });
                             var ownersOnlyUpdMem = users.Where(x => HasOwner(EnsureJobs(x.Jobs))).Select(x => x.Username).ToArray();
@@ -626,6 +627,182 @@ public static class WebSocketMiddleware
                         await WebSocketStore.BroadcastAsync(new { type = "membership.removed", username = targetUsername, clubId = clubIdCur });
                         await WebSocketStore.SendAsync(ws, new { type = "user.delete.ok" });
                         app.Logger.LogDebug($"WS user.delete.ok club={clubIdCur} target={targetUsername}");
+                        continue;
+                    }
+                    if (type == "user.manual.add")
+                    {
+                        var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
+                        var displayName = root.TryGetProperty("displayName", out var dn) ? (dn.GetString() ?? string.Empty) : string.Empty;
+                        var hasJobs = TryGetJobsFromPayload(root, out var jobsRaw);
+                        var jobs = EnsureJobs(hasJobs ? jobsRaw : Array.Empty<string>());
+                        var clubIdCur = (WebSocketStore.TryGetClub(id, out var ccU) && !string.IsNullOrWhiteSpace(ccU)) ? ccU! : "default";
+                        if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(displayName)) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.add.fail", message = "Missing token or display name" }); continue; }
+                        if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.add.fail", message = "Invalid session" }); app.Logger.LogDebug($"WS user.manual.add.fail club={clubIdCur} reason=session"); continue; }
+                        bool isOwner;
+                        bool canManage;
+                        var rightsMap = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value);
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEfChk = app.Services.CreateScope();
+                            var efChk = scopeEfChk.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            var actorJobs = await GetJobsFromDbAsync(efChk, clubIdCur, username);
+                            var rightsDbChk = await efChk.GetJobRightsAsync(clubIdCur);
+                            var actorRights = MergeRights(rightsDbChk, actorJobs);
+                            isOwner = HasOwner(actorJobs);
+                            canManage = actorRights.ManageUsers;
+                            if (!(isOwner || canManage)) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.add.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.manual.add.fail club={clubIdCur} reason=rights"); continue; }
+                            if (HasOwner(jobs) && !isOwner) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.add.fail", message = "Only owner can assign owner" }); app.Logger.LogDebug($"WS user.manual.add.fail club={clubIdCur} reason=assignowner"); continue; }
+                            var created = await efChk.CreateManualStaffEntryAsync(clubIdCur, displayName, jobs);
+                            if (created == null) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.add.fail", message = "Already exists or invalid" }); app.Logger.LogDebug($"WS user.manual.add.fail club={clubIdCur} reason=exists"); continue; }
+                            using var scopeEfWs = app.Services.CreateScope();
+                            var efWs = scopeEfWs.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            var list = await efWs.GetStaffUsersAsync(clubIdCur) ?? Array.Empty<StaffUserInfo>();
+                            var rightsDb = await efWs.GetJobRightsAsync(clubIdCur);
+                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.list", users = list.Select(u => u.Username).OrderBy(u => u, StringComparer.Ordinal).ToArray() });
+                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.details", users = list.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => BuildStaffUserPayload(u, rightsDb)).ToArray() });
+                        }
+                        else
+                        {
+                            var actorJobs = GetJobsFromStore(clubIdCur, username);
+                            var actorRights = MergeRights(rightsMap, actorJobs);
+                            isOwner = HasOwner(actorJobs);
+                            canManage = actorRights.ManageUsers;
+                            if (!(isOwner || canManage)) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.add.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.manual.add.fail club={clubIdCur} reason=rights mem"); continue; }
+                            if (HasOwner(jobs) && !isOwner) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.add.fail", message = "Only owner can assign owner" }); app.Logger.LogDebug($"WS user.manual.add.fail club={clubIdCur} reason=assignowner mem"); continue; }
+                            if (Store.StaffUsers.ContainsKey(displayName)) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.add.fail", message = "Already exists" }); app.Logger.LogDebug($"WS user.manual.add.fail club={clubIdCur} reason=exists mem"); continue; }
+                            string uid;
+                            do
+                            {
+                                uid = Util.NewUid();
+                            } while (Store.StaffUsers.Values.Any(u => string.Equals(u.Uid, uid, StringComparison.Ordinal)));
+                            var info = new StaffUserInfo { Username = displayName, PasswordHash = string.Empty, Jobs = EnsureJobs(jobs), Role = "power", CreatedAt = DateTimeOffset.UtcNow, Uid = uid, IsManual = true };
+                            Store.StaffUsers[displayName] = info;
+                            Store.SetJobsForUser(clubIdCur, displayName, info.Jobs);
+                            await Persistence.SaveAsync();
+                            var usersClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubIdCur + "|", StringComparison.Ordinal)).Select(k => k.Substring(clubIdCur.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
+                            var users = usersClub.Select(u => BuildStaffUserPayloadFromStore(clubIdCur, u, rightsMap)).ToArray();
+                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.list", users = usersClub });
+                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.details", users });
+                        }
+                        await WebSocketStore.SendAsync(ws, new { type = "user.manual.add.ok" });
+                        app.Logger.LogDebug($"WS user.manual.add.ok club={clubIdCur} name={displayName}");
+                        continue;
+                    }
+                    if (type == "user.manual.link")
+                    {
+                        var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
+                        var manualUid = root.TryGetProperty("manualUid", out var mu) ? (mu.GetString() ?? string.Empty) : string.Empty;
+                        var targetUid = root.TryGetProperty("targetUid", out var tu) ? (tu.GetString() ?? string.Empty) : string.Empty;
+                        var clubIdCur = (WebSocketStore.TryGetClub(id, out var ccU) && !string.IsNullOrWhiteSpace(ccU)) ? ccU! : "default";
+                        if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(manualUid) || string.IsNullOrWhiteSpace(targetUid)) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Missing token or uid" }); continue; }
+                        if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Invalid session" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=session"); continue; }
+                        bool isOwner;
+                        bool canManage;
+                        var rightsMap = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value);
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEfChk = app.Services.CreateScope();
+                            var efChk = scopeEfChk.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            var actorJobs = await GetJobsFromDbAsync(efChk, clubIdCur, username);
+                            var rightsDbChk = await efChk.GetJobRightsAsync(clubIdCur);
+                            var actorRights = MergeRights(rightsDbChk, actorJobs);
+                            isOwner = HasOwner(actorJobs);
+                            canManage = actorRights.ManageUsers;
+                            if (!(isOwner || canManage)) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=rights"); continue; }
+                            var manualInfo = await efChk.GetStaffUserByUidAsync(clubIdCur, manualUid);
+                            if (manualInfo == null || !manualInfo.IsManual) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Manual entry not found" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=manualmissing"); continue; }
+                            var manualJobs = EnsureJobs(manualInfo.Jobs);
+                            if (HasOwner(manualJobs) && !isOwner) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Only owner can assign owner" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=assignowner"); continue; }
+                            var targetInfo = await efChk.GetStaffUserByUidAsync(clubIdCur, targetUid);
+                            var targetJobs = targetInfo != null ? EnsureJobs(targetInfo.Jobs) : Array.Empty<string>();
+                            if (targetInfo != null && HasOwner(targetJobs) && !isOwner) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Only owner can modify owner" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=owner"); continue; }
+                            if (targetInfo != null && HasOwner(targetJobs) && !HasOwner(manualJobs))
+                            {
+                                var listOwners = await efChk.GetStaffUsersAsync(clubIdCur) ?? Array.Empty<StaffUserInfo>();
+                                var ownersCount = listOwners.Count(u => HasOwner(EnsureJobs(u.Jobs)));
+                                if (ownersCount <= 1) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Cannot demote last owner" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=lastowner"); continue; }
+                            }
+                            if (!isOwner)
+                            {
+                                var actorRank = actorRights.Rank;
+                                var newRank = MergeRights(rightsDbChk, manualJobs).Rank;
+                                if (actorRank <= newRank) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Cannot assign role with equal or higher rank" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=newrank"); continue; }
+                                var targetRank = MergeRights(rightsDbChk, EnsureJobs(targetJobs)).Rank;
+                                if (actorRank <= targetRank) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Cannot modify equal or higher rank" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=targetrank"); continue; }
+                            }
+                            var linked = await efChk.LinkManualStaffEntryAsync(clubIdCur, manualUid, targetUid);
+                            if (linked == null) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Link failed" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=linkfail"); continue; }
+                            using var scopeEfWs = app.Services.CreateScope();
+                            var efWs = scopeEfWs.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            var list = await efWs.GetStaffUsersAsync(clubIdCur) ?? Array.Empty<StaffUserInfo>();
+                            var rightsDb = await efWs.GetJobRightsAsync(clubIdCur);
+                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.list", users = list.Select(u => u.Username).OrderBy(u => u, StringComparer.Ordinal).ToArray() });
+                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.details", users = list.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => BuildStaffUserPayload(u, rightsDb)).ToArray() });
+                        }
+                        else
+                        {
+                            var actorJobs = GetJobsFromStore(clubIdCur, username);
+                            var actorRights = MergeRights(rightsMap, actorJobs);
+                            isOwner = HasOwner(actorJobs);
+                            canManage = actorRights.ManageUsers;
+                            if (!(isOwner || canManage)) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=rights mem"); continue; }
+                            StaffUserInfo? manualInfo = null;
+                            string manualName = string.Empty;
+                            foreach (var kv in Store.StaffUsers)
+                            {
+                                if (kv.Value != null && kv.Value.IsManual && string.Equals(kv.Value.Uid, manualUid, StringComparison.Ordinal))
+                                {
+                                    manualInfo = kv.Value;
+                                    manualName = kv.Key;
+                                    break;
+                                }
+                            }
+                            if (manualInfo == null) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Manual entry not found" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=manualmissing mem"); continue; }
+                            var manualJobs = EnsureJobs(Store.GetJobsForUser(clubIdCur, manualName));
+                            if (HasOwner(manualJobs) && !isOwner) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Only owner can assign owner" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=assignowner mem"); continue; }
+                            StaffUserInfo? targetInfo = null;
+                            string targetName = string.Empty;
+                            foreach (var kv in Store.StaffUsers)
+                            {
+                                if (kv.Value != null && string.Equals(kv.Value.Uid, targetUid, StringComparison.Ordinal))
+                                {
+                                    targetInfo = kv.Value;
+                                    targetName = kv.Key;
+                                    break;
+                                }
+                            }
+                            var targetJobs = string.IsNullOrWhiteSpace(targetName) ? Array.Empty<string>() : EnsureJobs(Store.GetJobsForUser(clubIdCur, targetName));
+                            if (!string.IsNullOrWhiteSpace(targetName) && HasOwner(targetJobs) && !isOwner) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Only owner can modify owner" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=owner mem"); continue; }
+                            if (!string.IsNullOrWhiteSpace(targetName) && HasOwner(targetJobs) && !HasOwner(manualJobs))
+                            {
+                                var ownersCountMem = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubIdCur + "|", StringComparison.Ordinal)).Select(k => k.Substring(clubIdCur.Length + 1)).Count(u => HasOwner(Store.GetJobsForUser(clubIdCur, u)));
+                                if (ownersCountMem <= 1) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Cannot demote last owner" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=lastowner mem"); continue; }
+                            }
+                            if (!isOwner)
+                            {
+                                var actorRank = actorRights.Rank;
+                                var newRank = MergeRights(rightsMap, manualJobs).Rank;
+                                if (actorRank <= newRank) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Cannot assign role with equal or higher rank" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=newrank mem"); continue; }
+                                var targetRank = MergeRights(rightsMap, EnsureJobs(targetJobs)).Rank;
+                                if (actorRank <= targetRank) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.fail", message = "Cannot modify equal or higher rank" }); app.Logger.LogDebug($"WS user.manual.link.fail club={clubIdCur} reason=targetrank mem"); continue; }
+                            }
+                            var finalTargetName = string.IsNullOrWhiteSpace(targetName) ? targetUid : targetName;
+                            var info = new StaffUserInfo { Username = finalTargetName, PasswordHash = string.Empty, Jobs = EnsureJobs(manualJobs), Role = manualInfo.Role, CreatedAt = manualInfo.CreatedAt, Uid = targetUid, IsManual = false };
+                            Store.StaffUsers[finalTargetName] = info;
+                            Store.SetJobsForUser(clubIdCur, finalTargetName, info.Jobs);
+                            if (!string.IsNullOrWhiteSpace(manualName))
+                            {
+                                Store.StaffUsers.TryRemove(manualName, out _);
+                                Store.ClubUserJobs.TryRemove(clubIdCur + "|" + manualName, out _);
+                            }
+                            await Persistence.SaveAsync();
+                            var usersClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubIdCur + "|", StringComparison.Ordinal)).Select(k => k.Substring(clubIdCur.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
+                            var users = usersClub.Select(u => BuildStaffUserPayloadFromStore(clubIdCur, u, rightsMap)).ToArray();
+                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.list", users = usersClub });
+                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.details", users });
+                        }
+                        await WebSocketStore.SendAsync(ws, new { type = "user.manual.link.ok" });
+                        app.Logger.LogDebug($"WS user.manual.link.ok club={clubIdCur} manualUid={manualUid} targetUid={targetUid}");
                         continue;
                     }
                     if (type == "user.update.request")
