@@ -56,7 +56,8 @@ public sealed class EfStore
             var existsMembership = await _db.StaffUsers.AnyAsync(x => x.ClubId == clubId && x.UserUid == existingUser.Uid);
             if (!existsMembership)
             {
-                _db.StaffUsers.Add(new StaffUserEntity { ClubId = clubId, UserUid = existingUser.Uid, Job = "Unassigned", Role = "power", CreatedAt = DateTimeOffset.UtcNow });
+                _db.StaffUsers.Add(new StaffUserEntity { ClubId = clubId, UserUid = existingUser.Uid, Role = "power", CreatedAt = DateTimeOffset.UtcNow });
+                _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = existingUser.Uid, JobName = "Unassigned" });
                 await _db.SaveChangesAsync();
             }
         }
@@ -273,7 +274,10 @@ public sealed class EfStore
         if (baseUser == null) return null;
         var member = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.UserUid == baseUser.Uid);
         if (member == null) return null;
-        return new StaffUserInfo { Username = _crypto.DecryptString(baseUser.Username), PasswordHash = baseUser.PasswordHash, Job = member.Job, Role = member.Role, CreatedAt = member.CreatedAt };
+        var jobs = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == baseUser.Uid).Select(x => x.JobName).ToArrayAsync();
+        if (jobs.Length == 0) jobs = new[] { "Unassigned" };
+        Array.Sort(jobs, StringComparer.Ordinal);
+        return new StaffUserInfo { Username = _crypto.DecryptString(baseUser.Username), PasswordHash = baseUser.PasswordHash, Jobs = jobs, Role = member.Role, CreatedAt = member.CreatedAt, Uid = baseUser.Uid };
     }
 
     public async Task<StaffUserInfo?> GetStaffUserByUsernameAsync(string username)
@@ -281,7 +285,7 @@ public sealed class EfStore
         var buList = await _db.BaseUsers.ToListAsync();
         var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
         if (baseUser == null) return null;
-        return new StaffUserInfo { Username = _crypto.DecryptString(baseUser.Username), PasswordHash = baseUser.PasswordHash, Job = "Unassigned", Role = "power", CreatedAt = baseUser.CreatedAt, Uid = baseUser.Uid };
+        return new StaffUserInfo { Username = _crypto.DecryptString(baseUser.Username), PasswordHash = baseUser.PasswordHash, Jobs = Array.Empty<string>(), Role = "power", CreatedAt = baseUser.CreatedAt, Uid = baseUser.Uid };
     }
 
     public async Task<string?> GetUsernameByUidAsync(string uid)
@@ -295,11 +299,22 @@ public sealed class EfStore
         var list = await _db.StaffUsers.Where(x => x.ClubId == clubId).ToListAsync();
         var uids = list.Select(x => x.UserUid).Distinct().ToArray();
         var baseUsers = await _db.BaseUsers.Where(b => uids.Contains(b.Uid)).ToDictionaryAsync(b => b.Uid, b => b);
+        var jobList = await _db.StaffUserJobs.Where(x => x.ClubId == clubId).ToListAsync();
+        var jobsByUser = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var j in jobList)
+        {
+            if (!jobsByUser.TryGetValue(j.UserUid, out var userJobs))
+            {
+                userJobs = new List<string>();
+                jobsByUser[j.UserUid] = userJobs;
+            }
+            if (!userJobs.Contains(j.JobName)) userJobs.Add(j.JobName);
+        }
         return list.OrderBy(x => baseUsers.TryGetValue(x.UserUid, out var bu) ? _crypto.DecryptString(bu.Username) : x.UserUid, StringComparer.Ordinal).Select(u => new StaffUserInfo
         {
             Username = (baseUsers.TryGetValue(u.UserUid, out var bu) ? _crypto.DecryptString(bu.Username) : u.UserUid),
             PasswordHash = (baseUsers.TryGetValue(u.UserUid, out var bu2) ? bu2.PasswordHash : string.Empty),
-            Job = u.Job,
+            Jobs = GetSortedJobs(jobsByUser, u.UserUid),
             Role = u.Role,
             CreatedAt = u.CreatedAt,
             Uid = u.UserUid
@@ -318,7 +333,8 @@ public sealed class EfStore
         }
         var exists = await _db.StaffUsers.AnyAsync(x => x.ClubId == clubId && x.UserUid == baseUser.Uid);
         if (exists) return;
-        _db.StaffUsers.Add(new StaffUserEntity { ClubId = clubId, UserUid = baseUser.Uid, Job = "Unassigned", Role = "power", CreatedAt = DateTimeOffset.UtcNow });
+        _db.StaffUsers.Add(new StaffUserEntity { ClubId = clubId, UserUid = baseUser.Uid, Role = "power", CreatedAt = DateTimeOffset.UtcNow });
+        _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = baseUser.Uid, JobName = "Unassigned" });
         await _db.SaveChangesAsync();
     }
 
@@ -342,22 +358,27 @@ public sealed class EfStore
         if (u != null)
         {
             _db.StaffUsers.Remove(u);
+            var jobs = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == baseUser.Uid).ToListAsync();
+            if (jobs.Count > 0) _db.StaffUserJobs.RemoveRange(jobs);
             await _db.SaveChangesAsync();
         }
     }
 
-    public async Task UpdateStaffUserJobAsync(string clubId, string username, string job)
+    public async Task UpdateStaffUserJobsAsync(string clubId, string username, string[] jobs)
     {
         var buList = await _db.BaseUsers.ToListAsync();
         var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
         if (baseUser == null) return;
-        var u = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.UserUid == baseUser.Uid);
-        if (u != null)
+        var existing = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == baseUser.Uid).ToListAsync();
+        if (existing.Count > 0) _db.StaffUserJobs.RemoveRange(existing);
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var job in jobs)
         {
-            u.Job = job;
-            _db.StaffUsers.Update(u);
-            await _db.SaveChangesAsync();
+            if (string.IsNullOrWhiteSpace(job)) continue;
+            if (set.Add(job)) _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = baseUser.Uid, JobName = job });
         }
+        if (set.Count == 0) _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = baseUser.Uid, JobName = "Unassigned" });
+        await _db.SaveChangesAsync();
     }
 
     public async Task UpdateStaffUserRoleAsync(string clubId, string username, string role)
@@ -669,14 +690,29 @@ public sealed class EfStore
         await _db.SaveChangesAsync();
     }
 
-    public async Task<bool> AddStaffMembershipByUidAsync(string clubId, string targetUid, string job)
+    public async Task<bool> AddStaffMembershipByUidAsync(string clubId, string targetUid, string[] jobs)
     {
         var baseUser = await _db.BaseUsers.FirstOrDefaultAsync(x => x.Uid == targetUid);
         if (baseUser == null) return false;
         var exists = await _db.StaffUsers.AnyAsync(x => x.ClubId == clubId && x.UserUid == baseUser.Uid);
         if (exists) return false;
-        _db.StaffUsers.Add(new StaffUserEntity { ClubId = clubId, UserUid = baseUser.Uid, Job = string.IsNullOrWhiteSpace(job) ? "Unassigned" : job, Role = "power", CreatedAt = DateTimeOffset.UtcNow });
+        _db.StaffUsers.Add(new StaffUserEntity { ClubId = clubId, UserUid = baseUser.Uid, Role = "power", CreatedAt = DateTimeOffset.UtcNow });
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var job in jobs)
+        {
+            if (string.IsNullOrWhiteSpace(job)) continue;
+            if (set.Add(job)) _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = baseUser.Uid, JobName = job });
+        }
+        if (set.Count == 0) _db.StaffUserJobs.Add(new StaffUserJobEntity { ClubId = clubId, UserUid = baseUser.Uid, JobName = "Unassigned" });
         await _db.SaveChangesAsync();
         return true;
+    }
+
+    private static string[] GetSortedJobs(Dictionary<string, List<string>> jobsByUser, string userUid)
+    {
+        if (!jobsByUser.TryGetValue(userUid, out var list) || list.Count == 0) return new[] { "Unassigned" };
+        var arr = list.ToArray();
+        Array.Sort(arr, StringComparer.Ordinal);
+        return arr;
     }
 }

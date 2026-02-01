@@ -8,6 +8,7 @@ public sealed class VenuePlusDbContext : DbContext
 
     public DbSet<VipEntryEntity> VipEntries => Set<VipEntryEntity>();
     public DbSet<StaffUserEntity> StaffUsers => Set<StaffUserEntity>();
+    public DbSet<StaffUserJobEntity> StaffUserJobs => Set<StaffUserJobEntity>();
     public DbSet<JobRightEntity> JobRights => Set<JobRightEntity>();
     public DbSet<ClubEntity> Clubs => Set<ClubEntity>();
     public DbSet<BaseUserEntity> BaseUsers => Set<BaseUserEntity>();
@@ -18,6 +19,7 @@ public sealed class VenuePlusDbContext : DbContext
     {
         modelBuilder.Entity<VipEntryEntity>().HasIndex(e => new { e.ClubId, e.CharacterName, e.HomeWorld }).IsUnique();
         modelBuilder.Entity<StaffUserEntity>().HasIndex(e => new { e.ClubId, e.UserUid }).IsUnique();
+        modelBuilder.Entity<StaffUserJobEntity>().HasKey(e => new { e.ClubId, e.UserUid, e.JobName });
         modelBuilder.Entity<JobRightEntity>().HasIndex(e => new { e.ClubId, e.JobName }).IsUnique();
         modelBuilder.Entity<ClubEntity>().HasIndex(e => e.ClubId).IsUnique();
         modelBuilder.Entity<ClubEntity>().HasIndex(e => e.AccessKey).IsUnique().HasFilter("\"AccessKey\" IS NOT NULL");

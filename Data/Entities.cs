@@ -34,11 +34,21 @@ public sealed class StaffUserEntity
     public string UserUid { get; set; } = string.Empty;
     [Required]
     [MaxLength(64)]
-    public string Job { get; set; } = "Unassigned";
-    [Required]
-    [MaxLength(64)]
     public string Role { get; set; } = "power";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class StaffUserJobEntity
+{
+    [Required]
+    [MaxLength(64)]
+    public string ClubId { get; set; } = string.Empty;
+    [Required]
+    [MaxLength(15)]
+    public string UserUid { get; set; } = string.Empty;
+    [Required]
+    [MaxLength(64)]
+    public string JobName { get; set; } = "Unassigned";
 }
 
 public sealed class JobRightEntity

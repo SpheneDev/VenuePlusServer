@@ -129,10 +129,11 @@ public class Program
                 {
                     Username = "staff",
                     PasswordHash = Util.HashPassword("staff", defaultStaffPassword),
-                    Job = "Unassigned",
+                    Jobs = Array.Empty<string>(),
                     Role = "power",
                     CreatedAt = DateTimeOffset.UtcNow
                 };
+                Store.SetJobsForUser("default", "staff", new[] { "Unassigned" });
             }
         }
     }

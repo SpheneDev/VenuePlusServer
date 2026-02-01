@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -8,6 +9,38 @@ namespace VenuePlus.Server;
 
 public static class PublicEndpoints
 {
+    private static string[] EnsureJobs(string[] jobs)
+    {
+        if (jobs.Length == 0) return new[] { "Unassigned" };
+        return jobs;
+    }
+
+    private static bool HasOwner(string[] jobs)
+    {
+        for (int i = 0; i < jobs.Length; i++)
+        {
+            if (string.Equals(jobs[i], "Owner", StringComparison.Ordinal)) return true;
+        }
+        return false;
+    }
+
+    private static string GetPrimaryJob(Dictionary<string, Rights> rightsMap, string[] jobs)
+    {
+        if (HasOwner(jobs)) return "Owner";
+        string best = "Unassigned";
+        int bestRank = 0;
+        for (int i = 0; i < jobs.Length; i++)
+        {
+            if (!rightsMap.TryGetValue(jobs[i], out var r)) continue;
+            if (r.Rank > bestRank)
+            {
+                bestRank = r.Rank;
+                best = jobs[i];
+            }
+        }
+        return best;
+    }
+
     public static void Map(WebApplication app, string? conn)
     {
         app.MapGet("/", () => Results.Ok(new { ok = true, time = DateTimeOffset.UtcNow })).RequireCors("PublicJson");
@@ -97,19 +130,30 @@ public static class PublicEndpoints
                     using var scope2 = app.Services.CreateScope();
                     var ef2 = scope2.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
                     var list = await ef2.GetStaffUsersAsync(clubId!) ?? Array.Empty<StaffUserInfo>();
-                    var users = list.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new { Username = u.Username, Job = u.Job, Role = u.Role, CreatedAt = u.CreatedAt }).ToArray();
+                    var rights = await ef2.GetJobRightsAsync(clubId!);
+                    var users = list.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u =>
+                    {
+                        var jobs = EnsureJobs(u.Jobs);
+                        return new { Username = u.Username, Jobs = jobs, Job = GetPrimaryJob(rights, jobs), Role = u.Role, CreatedAt = u.CreatedAt };
+                    }).ToArray();
                     app.Logger.LogDebug($"Public Staff ok club={clubId} count={users.Length}");
                     return Results.Json(users);
                 }
                 else
                 {
                     var usersClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubId + "|", StringComparison.Ordinal)).Select(k => k.Substring(clubId!.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
-                    var users = usersClub.Select(u => new
+                    var rights = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value);
+                    var users = usersClub.Select(u =>
                     {
-                        Username = u,
-                        Job = (Store.ClubUserJobs.TryGetValue(clubId! + "|" + u, out var j) ? j : "Unassigned"),
-                        Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"),
-                        CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow)
+                        var jobs = EnsureJobs(Store.GetJobsForUser(clubId!, u));
+                        return new
+                        {
+                            Username = u,
+                            Jobs = jobs,
+                            Job = GetPrimaryJob(rights, jobs),
+                            Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"),
+                            CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow)
+                        };
                     }).ToArray();
                     app.Logger.LogDebug($"Public Staff ok mem club={clubId} count={users.Length}");
                     return Results.Json(users);

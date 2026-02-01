@@ -33,7 +33,7 @@ public sealed class StaffUser
 {
     public string Username { get; set; } = string.Empty;
     public DateTimeOffset? CreatedAt { get; set; }
-    public string Job { get; set; } = "Unassigned";
+    public string[] Jobs { get; set; } = Array.Empty<string>();
     public string Role { get; set; } = "power";
     public string Uid { get; set; } = string.Empty;
 }
@@ -43,7 +43,7 @@ public sealed class StaffUserInfo
     public string Username { get; set; } = string.Empty;
     public string PasswordHash { get; set; } = string.Empty;
     public string RecoveryCodeHash { get; set; } = string.Empty;
-    public string Job { get; set; } = "Unassigned";
+    public string[] Jobs { get; set; } = Array.Empty<string>();
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public string Role { get; set; } = "power";
     public string Uid { get; set; } = string.Empty;
@@ -76,7 +76,7 @@ public sealed class ServerState
     public VipEntry[] VipEntries { get; set; } = Array.Empty<VipEntry>();
     public StaffUserInfo[] StaffUsers { get; set; } = Array.Empty<StaffUserInfo>();
     public System.Collections.Generic.Dictionary<string, Rights> JobRights { get; set; } = new System.Collections.Generic.Dictionary<string, Rights>(System.StringComparer.Ordinal);
-    public System.Collections.Generic.Dictionary<string, string> ClubUserJobs { get; set; } = new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal);
+    public System.Collections.Generic.Dictionary<string, string[]> ClubUserJobs { get; set; } = new System.Collections.Generic.Dictionary<string, string[]>(System.StringComparer.Ordinal);
     public System.Collections.Generic.Dictionary<string, string> ClubAccessKeysByClub { get; set; } = new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal);
     public System.Collections.Generic.Dictionary<string, string?> ClubLogos { get; set; } = new System.Collections.Generic.Dictionary<string, string?>(System.StringComparer.Ordinal);
 }
