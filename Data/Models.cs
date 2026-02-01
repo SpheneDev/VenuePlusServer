@@ -37,6 +37,7 @@ public sealed class StaffUser
     public string Role { get; set; } = "power";
     public string Uid { get; set; } = string.Empty;
     public bool IsManual { get; set; }
+    public bool IsOnline { get; set; }
 }
 
 public sealed class StaffUserInfo

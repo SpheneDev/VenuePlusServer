@@ -117,7 +117,7 @@ public static class WebSocketMiddleware
     private static object BuildStaffUserPayload(StaffUserInfo info, System.Collections.Generic.Dictionary<string, Rights> rightsMap)
     {
         var jobs = EnsureJobs(info.Jobs);
-        return new { Username = info.Username, Jobs = jobs, Job = GetPrimaryJob(rightsMap, jobs), Role = info.Role, CreatedAt = info.CreatedAt, Uid = info.Uid, IsManual = info.IsManual };
+        return new { Username = info.Username, Jobs = jobs, Job = GetPrimaryJob(rightsMap, jobs), Role = info.Role, CreatedAt = info.CreatedAt, Uid = info.Uid, IsManual = info.IsManual, IsOnline = IsUserOnline(info.Username) };
     }
 
     private static object BuildStaffUserPayloadFromStore(string clubId, string username, System.Collections.Generic.Dictionary<string, Rights> rightsMap)
@@ -128,7 +128,59 @@ public static class WebSocketMiddleware
         var createdAt = info?.CreatedAt ?? DateTimeOffset.UtcNow;
         var uid = !string.IsNullOrWhiteSpace(info?.Uid) ? info!.Uid : username;
         var isManual = info?.IsManual ?? false;
-        return new { Username = username, Jobs = jobs, Job = GetPrimaryJob(rightsMap, jobs), Role = role, CreatedAt = createdAt, Uid = uid, IsManual = isManual };
+        return new { Username = username, Jobs = jobs, Job = GetPrimaryJob(rightsMap, jobs), Role = role, CreatedAt = createdAt, Uid = uid, IsManual = isManual, IsOnline = IsUserOnline(username) };
+    }
+
+    private static bool IsUserOnline(string username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return false;
+        var now = DateTimeOffset.UtcNow;
+        foreach (var kv in Store.StaffSessions)
+        {
+            if (!string.Equals(kv.Value, username, StringComparison.Ordinal)) continue;
+            if (Store.StaffSessionExpiry.TryGetValue(kv.Key, out var exp) && exp > now) return true;
+        }
+        return false;
+    }
+
+    private static string[] GetUserClubsFromStore(string username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return Array.Empty<string>();
+        var set = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
+        foreach (var k in Store.ClubUserJobs.Keys)
+        {
+            var p = k.IndexOf('|');
+            if (p <= 0) continue;
+            var user = k.Substring(p + 1);
+            if (!string.Equals(user, username, StringComparison.Ordinal)) continue;
+            var club = k.Substring(0, p);
+            if (!string.IsNullOrWhiteSpace(club)) set.Add(club);
+        }
+        var arr = new string[set.Count];
+        int i = 0;
+        foreach (var c in set)
+        {
+            arr[i] = c;
+            i++;
+        }
+        Array.Sort(arr, StringComparer.Ordinal);
+        return arr;
+    }
+
+    private static async System.Threading.Tasks.Task BroadcastUsersDetailsForClubDbAsync(string clubId, VenuePlus.Server.Services.EfStore efSvc)
+    {
+        var list = await efSvc.GetStaffUsersAsync(clubId) ?? Array.Empty<StaffUserInfo>();
+        var rightsDb = await efSvc.GetJobRightsAsync(clubId);
+        var users = list.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => BuildStaffUserPayload(u, rightsDb)).ToArray();
+        await WebSocketStore.BroadcastToClubAsync(clubId, new { type = "users.details", users });
+    }
+
+    private static System.Threading.Tasks.Task BroadcastUsersDetailsForClubMemAsync(string clubId)
+    {
+        var usersClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubId + "|", StringComparison.Ordinal)).Select(k => k.Substring(clubId.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
+        var rightsMap = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value);
+        var users = usersClub.Select(u => BuildStaffUserPayloadFromStore(clubId, u, rightsMap)).ToArray();
+        return WebSocketStore.BroadcastToClubAsync(clubId, new { type = "users.details", users });
     }
 
     public static void Use(WebApplication app, string? conn)
@@ -164,7 +216,7 @@ public static class WebSocketMiddleware
                 await WebSocketStore.SendAsync(ws, new { type = "shift.snapshot", entries = shiftsDb.OrderBy(e => e.StartAt).ToArray() });
                 var usersDbInit = await efSvcWs.GetStaffUsersAsync(clubIdWs) ?? Array.Empty<StaffUserInfo>();
                 await WebSocketStore.SendAsync(ws, new { type = "users.list", users = usersDbInit.Select(u => u.Username).OrderBy(u => u, StringComparer.Ordinal).ToArray() });
-                await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDbInit.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual }).ToArray() });
+                await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDbInit.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual, IsOnline = IsUserOnline(u.Username) }).ToArray() });
                 var jobsDbInit = await efSvcWs.GetJobsAsync(clubIdWs) ?? Array.Empty<string>();
                 await WebSocketStore.SendAsync(ws, new { type = "jobs.list", jobs = jobsDbInit });
                 var rightsDbInit = await efSvcWs.GetJobRightsAsync(clubIdWs);
@@ -188,7 +240,8 @@ public static class WebSocketMiddleware
                     Username = u,
                     Jobs = Store.GetJobsForUser(clubIdWs, u),
                     Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"),
-                    CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow)
+                    CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow),
+                    IsOnline = IsUserOnline(u)
                 }).ToArray();
                 await WebSocketStore.SendAsync(ws, new { type = "users.details", users = detMem });
                 await WebSocketStore.SendAsync(ws, new { type = "jobs.list", jobs = Store.JobRights.Keys.OrderBy(j => j, StringComparer.Ordinal).ToArray() });
@@ -238,7 +291,7 @@ public static class WebSocketMiddleware
                             await WebSocketStore.SendAsync(ws, new { type = "dj.snapshot", entries = djsDbSw.OrderBy(e => e.DjName, StringComparer.Ordinal).ToArray() });
                         var usersDb = await efSvcWs2.GetStaffUsersAsync(newClub);
                         await WebSocketStore.SendAsync(ws, new { type = "users.list", users = usersDb.Select(u => u.Username).OrderBy(u => u, StringComparer.Ordinal).ToArray() });
-                        await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDb.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual }).ToArray() });
+                        await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDb.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual, IsOnline = IsUserOnline(u.Username) }).ToArray() });
                         var jobsDb = await efSvcWs2.GetJobsAsync(newClub);
                         await WebSocketStore.SendAsync(ws, new { type = "jobs.list", jobs = jobsDb });
                         var rightsDb = await efSvcWs2.GetJobRightsAsync(newClub);
@@ -259,7 +312,7 @@ public static class WebSocketMiddleware
                         await WebSocketStore.SendAsync(ws, new { type = "shift.snapshot", entries = shiftListSw });
                         var usersClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(newClub + "|", StringComparison.Ordinal)).Select(k => k.Substring(newClub.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
                         await WebSocketStore.SendAsync(ws, new { type = "users.list", users = usersClub });
-                            var detMem2 = usersClub.OrderBy(u => u, StringComparer.Ordinal).Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(newClub, u), Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow), IsManual = (Store.StaffUsers.TryGetValue(u, out var info3) && info3 != null && info3.IsManual) }).ToArray();
+                            var detMem2 = usersClub.OrderBy(u => u, StringComparer.Ordinal).Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(newClub, u), Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow), IsManual = (Store.StaffUsers.TryGetValue(u, out var info3) && info3 != null && info3.IsManual), IsOnline = IsUserOnline(u) }).ToArray();
                             await WebSocketStore.SendAsync(ws, new { type = "users.details", users = detMem2 });
                             await WebSocketStore.SendAsync(ws, new { type = "jobs.list", jobs = Store.JobRights.Keys.OrderBy(j => j, StringComparer.Ordinal).ToArray() });
                             await WebSocketStore.SendAsync(ws, new { type = "jobs.rights", rights = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value) });
@@ -303,20 +356,14 @@ public static class WebSocketMiddleware
                             await WebSocketStore.SendAsync(ws, new { type = "user.clubs", clubs });
                             var created = await efClubs.GetCreatedClubsAsync(username) ?? Array.Empty<string>();
                             await WebSocketStore.SendAsync(ws, new { type = "user.clubs.created", clubs = created });
+                            for (int i = 0; i < clubs.Length; i++)
+                            {
+                                await BroadcastUsersDetailsForClubDbAsync(clubs[i], efClubs);
+                            }
                         }
                         else
                         {
-                            var clubsMem = Store.ClubUserJobs.Keys
-                                .Where(k => {
-                                    var p = k.IndexOf('|');
-                                    if (p <= 0) return false;
-                                    var user = k.Substring(p + 1);
-                                    return string.Equals(user, username, StringComparison.Ordinal);
-                                })
-                                .Select(k => k.Substring(0, k.IndexOf('|')))
-                                .Distinct()
-                                .OrderBy(c => c, StringComparer.Ordinal)
-                                .ToArray();
+                            var clubsMem = GetUserClubsFromStore(username);
                             await WebSocketStore.SendAsync(ws, new { type = "user.clubs", clubs = clubsMem });
                             var clubsCreated = Store.CreatedClubs
                                 .Where(kv => string.Equals(kv.Value, username, StringComparison.Ordinal))
@@ -324,6 +371,10 @@ public static class WebSocketMiddleware
                                 .OrderBy(c => c, StringComparer.Ordinal)
                                 .ToArray();
                             await WebSocketStore.SendAsync(ws, new { type = "user.clubs.created", clubs = clubsCreated });
+                            for (int i = 0; i < clubsMem.Length; i++)
+                            {
+                                await BroadcastUsersDetailsForClubMemAsync(clubsMem[i]);
+                            }
                         }
                         continue;
                     }
@@ -365,9 +416,31 @@ public static class WebSocketMiddleware
                     {
                         var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
                         if (string.IsNullOrWhiteSpace(token)) { await WebSocketStore.SendAsync(ws, new { type = "session.logout.fail", code = 400 }); continue; }
+                        Store.StaffSessions.TryGetValue(token, out var logoutUser);
                         Store.StaffSessions.TryRemove(token, out _);
                         Store.StaffSessionExpiry.TryRemove(token, out _);
                         await WebSocketStore.SendAsync(ws, new { type = "session.logout.ok" });
+                        if (!string.IsNullOrWhiteSpace(logoutUser))
+                        {
+                            if (!string.IsNullOrWhiteSpace(conn))
+                            {
+                                using var scopeEfClubs = app.Services.CreateScope();
+                                var efClubs = scopeEfClubs.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                                var clubs = await efClubs.GetUserClubsAsync(logoutUser) ?? Array.Empty<string>();
+                                for (int i = 0; i < clubs.Length; i++)
+                                {
+                                    await BroadcastUsersDetailsForClubDbAsync(clubs[i], efClubs);
+                                }
+                            }
+                            else
+                            {
+                                var clubsMem = GetUserClubsFromStore(logoutUser);
+                                for (int i = 0; i < clubsMem.Length; i++)
+                                {
+                                    await BroadcastUsersDetailsForClubMemAsync(clubsMem[i]);
+                                }
+                            }
+                        }
                         continue;
                     }
                     if (type == "users.list.request")
@@ -395,12 +468,12 @@ public static class WebSocketMiddleware
                             using var scopeEfU = app.Services.CreateScope();
                             var efU = scopeEfU.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
                             var usersDb = await efU.GetStaffUsersAsync(clubReq) ?? Array.Empty<StaffUserInfo>();
-                            await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDb.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual }).ToArray() });
+                            await WebSocketStore.SendAsync(ws, new { type = "users.details", users = usersDb.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual, IsOnline = IsUserOnline(u.Username) }).ToArray() });
                         }
                         else
                         {
                             var usersForClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubReq + "|", StringComparison.Ordinal)).Select(k => k.Substring(clubReq.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
-                            var detMem2 = usersForClub.OrderBy(u => u, StringComparer.Ordinal).Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(clubReq, u), Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow), Uid = (Store.StaffUsers.TryGetValue(u, out var info3) ? info3.Uid : u), IsManual = (Store.StaffUsers.TryGetValue(u, out var info4) && info4 != null && info4.IsManual) }).ToArray();
+                            var detMem2 = usersForClub.OrderBy(u => u, StringComparer.Ordinal).Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(clubReq, u), Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow), Uid = (Store.StaffUsers.TryGetValue(u, out var info3) ? info3.Uid : u), IsManual = (Store.StaffUsers.TryGetValue(u, out var info4) && info4 != null && info4.IsManual), IsOnline = IsUserOnline(u) }).ToArray();
                             await WebSocketStore.SendAsync(ws, new { type = "users.details", users = detMem2 });
                         }
                         continue;
@@ -566,7 +639,7 @@ public static class WebSocketMiddleware
                             var efWs = scopeEfWs.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
                             var list = await efWs.GetStaffUsersAsync(clubIdCur) ?? Array.Empty<StaffUserInfo>();
                             await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.list", users = list.Select(u => u.Username).OrderBy(u => u, StringComparer.Ordinal).ToArray() });
-                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.details", users = list.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual }).ToArray() });
+                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.details", users = list.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u => new StaffUser { Username = u.Username, Jobs = u.Jobs, Role = u.Role, CreatedAt = u.CreatedAt, Uid = u.Uid, IsManual = u.IsManual, IsOnline = IsUserOnline(u.Username) }).ToArray() });
                             var ownersOnlyUpd = list.Where(u => HasOwner(EnsureJobs(u.Jobs))).Select(u => u.Username).ToArray();
                             if (ownersOnlyUpd.Length == 1)
                             {
@@ -604,7 +677,7 @@ public static class WebSocketMiddleware
                             Store.ClubUserJobs.TryRemove(jobKey, out _);
                             await Persistence.SaveAsync();
                             var usersClub = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubIdCur + "|", StringComparison.Ordinal)).Select(k => k.Substring(clubIdCur.Length + 1)).Distinct().OrderBy(u => u, StringComparer.Ordinal).ToArray();
-                            var users = usersClub.Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(clubIdCur, u), Role = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info3) ? info3.CreatedAt : DateTimeOffset.UtcNow), Uid = (Store.StaffUsers.TryGetValue(u, out var info4) ? info4.Uid : u), IsManual = (Store.StaffUsers.TryGetValue(u, out var info5) && info5 != null && info5.IsManual) }).ToArray();
+                            var users = usersClub.Select(u => new StaffUser { Username = u, Jobs = Store.GetJobsForUser(clubIdCur, u), Role = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.Role : "power"), CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info3) ? info3.CreatedAt : DateTimeOffset.UtcNow), Uid = (Store.StaffUsers.TryGetValue(u, out var info4) ? info4.Uid : u), IsManual = (Store.StaffUsers.TryGetValue(u, out var info5) && info5 != null && info5.IsManual), IsOnline = IsUserOnline(u) }).ToArray();
                             await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.list", users = users.Select(x => x.Username).ToArray() });
                             await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "users.details", users });
                             var ownersOnlyUpdMem = users.Where(x => HasOwner(EnsureJobs(x.Jobs))).Select(x => x.Username).ToArray();
