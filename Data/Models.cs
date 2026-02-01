@@ -42,6 +42,7 @@ public sealed class StaffUserInfo
 {
     public string Username { get; set; } = string.Empty;
     public string PasswordHash { get; set; } = string.Empty;
+    public string RecoveryCodeHash { get; set; } = string.Empty;
     public string Job { get; set; } = "Unassigned";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public string Role { get; set; } = "power";

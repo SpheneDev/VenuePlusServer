@@ -384,6 +384,32 @@ public sealed class EfStore
         await _db.SaveChangesAsync();
     }
 
+    public async Task<bool> SetRecoveryCodeHashAsync(string username, string recoveryCodeHash)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return false;
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
+        if (baseUser == null) return false;
+        baseUser.RecoveryCodeHash = recoveryCodeHash ?? string.Empty;
+        _db.BaseUsers.Update(baseUser);
+        await _db.SaveChangesAsync();
+        return true;
+    }
+
+    public async Task<bool> ResetPasswordByRecoveryCodeAsync(string username, string recoveryCodeHash, string newHash)
+    {
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(recoveryCodeHash)) return false;
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
+        if (baseUser == null) return false;
+        if (!string.Equals(baseUser.RecoveryCodeHash ?? string.Empty, recoveryCodeHash, StringComparison.Ordinal)) return false;
+        baseUser.PasswordHash = newHash;
+        baseUser.RecoveryCodeHash = string.Empty;
+        _db.BaseUsers.Update(baseUser);
+        await _db.SaveChangesAsync();
+        return true;
+    }
+
     public async Task<string?> GetStaffPasswordHashAsync(string clubId, string username)
     {
         var buList = await _db.BaseUsers.ToListAsync();

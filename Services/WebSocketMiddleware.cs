@@ -1504,6 +1504,92 @@ public static class WebSocketMiddleware
                         app.Logger.LogDebug($"WS user.self.password.ok user={username}");
                         continue;
                     }
+                    if (type == "user.recovery.generate.request")
+                    {
+                        var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
+                        if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = "user.recovery.generate.fail", code = 401 }); app.Logger.LogDebug("WS user.recovery.generate.fail reason=session"); continue; }
+                        var recoveryCode = Util.NewUid(24);
+                        var hash = Util.Sha256(recoveryCode);
+                        var ok = false;
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEf = app.Services.CreateScope();
+                            var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            ok = await efSvc.SetRecoveryCodeHashAsync(username, hash);
+                        }
+                        else
+                        {
+                            if (Store.StaffUsers.TryGetValue(username, out var info))
+                            {
+                                info.RecoveryCodeHash = hash;
+                                Store.StaffUsers[username] = info;
+                                await Persistence.SaveAsync();
+                                ok = true;
+                            }
+                        }
+                        if (!ok)
+                        {
+                            await WebSocketStore.SendAsync(ws, new { type = "user.recovery.generate.fail", code = 404 });
+                            app.Logger.LogDebug($"WS user.recovery.generate.fail user={username} reason=notfound");
+                            continue;
+                        }
+                        await WebSocketStore.SendAsync(ws, new { type = "user.recovery.generate.ok", recoveryCode });
+                        app.Logger.LogDebug($"WS user.recovery.generate.ok user={username}");
+                        continue;
+                    }
+                    if (type == "user.password.reset.recovery.request")
+                    {
+                        var username = root.TryGetProperty("username", out var u) ? (u.GetString() ?? string.Empty) : string.Empty;
+                        var recoveryCode = root.TryGetProperty("recoveryCode", out var rc) ? (rc.GetString() ?? string.Empty) : string.Empty;
+                        var newPassword = root.TryGetProperty("newPassword", out var np) ? (np.GetString() ?? string.Empty) : string.Empty;
+                        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(recoveryCode) || string.IsNullOrWhiteSpace(newPassword))
+                        {
+                            await WebSocketStore.SendAsync(ws, new { type = "user.password.reset.recovery.fail", code = 400, message = "Missing username, recovery code or password" });
+                            app.Logger.LogDebug("WS user.password.reset.recovery.fail reason=missing");
+                            continue;
+                        }
+                        if (!LoginRateLimiter.Allow("reset|" + username))
+                        {
+                            await WebSocketStore.SendAsync(ws, new { type = "user.password.reset.recovery.fail", code = 429, message = "Too many attempts" });
+                            app.Logger.LogDebug($"WS user.password.reset.recovery.fail user={username} reason=rate");
+                            continue;
+                        }
+                        var recoveryHash = Util.Sha256(recoveryCode);
+                        var newHash = Util.HashPassword(username, newPassword);
+                        bool ok;
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEf = app.Services.CreateScope();
+                            var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            ok = await efSvc.ResetPasswordByRecoveryCodeAsync(username, recoveryHash, newHash);
+                        }
+                        else
+                        {
+                            ok = Store.StaffUsers.TryGetValue(username, out var info) && string.Equals(info.RecoveryCodeHash ?? string.Empty, recoveryHash, StringComparison.Ordinal);
+                            if (ok)
+                            {
+                                info.PasswordHash = newHash;
+                                info.RecoveryCodeHash = string.Empty;
+                                Store.StaffUsers[username] = info;
+                                await Persistence.SaveAsync();
+                            }
+                        }
+                        if (!ok)
+                        {
+                            await WebSocketStore.SendAsync(ws, new { type = "user.password.reset.recovery.fail", code = 401, message = "Invalid recovery data" });
+                            app.Logger.LogDebug($"WS user.password.reset.recovery.fail user={username} reason=invalid");
+                            continue;
+                        }
+                        if (Store.StaffUsers.TryGetValue(username, out var cached))
+                        {
+                            cached.PasswordHash = newHash;
+                            cached.RecoveryCodeHash = string.Empty;
+                            Store.StaffUsers[username] = cached;
+                        }
+                        await WebSocketStore.SendAsync(ws, new { type = "user.password.reset.recovery.ok" });
+                        app.Logger.LogDebug($"WS user.password.reset.recovery.ok user={username}");
+                        continue;
+                    }
                     if (type == "club.invite")
                     {
                         var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;

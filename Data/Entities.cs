@@ -96,6 +96,8 @@ public sealed class BaseUserEntity
     [Required]
     [MaxLength(256)]
     public string PasswordHash { get; set; } = string.Empty;
+    [MaxLength(128)]
+    public string? RecoveryCodeHash { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
