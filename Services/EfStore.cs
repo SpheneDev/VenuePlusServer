@@ -312,7 +312,7 @@ public sealed class EfStore
         }
         DateTimeOffset? GetBirthday(StaffUserEntity entry)
         {
-            if (entry.IsManual) return null;
+            if (entry.IsManual) return entry.Birthday;
             return baseUsers.TryGetValue(entry.UserUid, out var bu) ? bu.Birthday : null;
         }
         string GetDisplayName(StaffUserEntity entry)
@@ -354,7 +354,7 @@ public sealed class EfStore
             CreatedAt = entry.CreatedAt,
             Uid = entry.UserUid,
             IsManual = true,
-            Birthday = null
+            Birthday = entry.Birthday
         };
     }
 
@@ -376,11 +376,11 @@ public sealed class EfStore
             CreatedAt = member.CreatedAt,
             Uid = member.UserUid,
             IsManual = member.IsManual,
-            Birthday = baseUser?.Birthday
+            Birthday = member.IsManual ? member.Birthday : baseUser?.Birthday
         };
     }
 
-    public async Task<StaffUserInfo?> CreateManualStaffEntryAsync(string clubId, string displayName, string[] jobs)
+    public async Task<StaffUserInfo?> CreateManualStaffEntryAsync(string clubId, string displayName, string[] jobs, DateTimeOffset? birthday)
     {
         if (string.IsNullOrWhiteSpace(displayName)) return null;
         var name = displayName.Trim();
@@ -402,7 +402,8 @@ public sealed class EfStore
             Role = "power",
             CreatedAt = now,
             IsManual = true,
-            DisplayName = name
+            DisplayName = name,
+            Birthday = birthday?.ToUniversalTime()
         });
         var set = new HashSet<string>(StringComparer.Ordinal);
         foreach (var job in jobs)
@@ -423,7 +424,7 @@ public sealed class EfStore
             CreatedAt = now,
             Uid = uid,
             IsManual = true,
-            Birthday = null
+            Birthday = birthday?.ToUniversalTime()
         };
     }
 
@@ -607,6 +608,18 @@ public sealed class EfStore
         var normalized = birthday.HasValue ? birthday.Value.ToUniversalTime() : (DateTimeOffset?)null;
         baseUser.Birthday = normalized;
         _db.BaseUsers.Update(baseUser);
+        await _db.SaveChangesAsync();
+        return true;
+    }
+
+    public async Task<bool> UpdateManualStaffBirthdayAsync(string clubId, string displayName, DateTimeOffset? birthday)
+    {
+        if (string.IsNullOrWhiteSpace(clubId) || string.IsNullOrWhiteSpace(displayName)) return false;
+        var manual = await _db.StaffUsers.FirstOrDefaultAsync(x => x.ClubId == clubId && x.IsManual && x.DisplayName == displayName);
+        if (manual == null) return false;
+        var normalized = birthday.HasValue ? birthday.Value.ToUniversalTime() : (DateTimeOffset?)null;
+        manual.Birthday = normalized;
+        _db.StaffUsers.Update(manual);
         await _db.SaveChangesAsync();
         return true;
     }

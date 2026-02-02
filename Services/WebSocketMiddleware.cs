@@ -709,6 +709,11 @@ public static class WebSocketMiddleware
                     {
                         var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
                         var displayName = root.TryGetProperty("displayName", out var dn) ? (dn.GetString() ?? string.Empty) : string.Empty;
+                        DateTimeOffset? birthday = null;
+                        if (root.TryGetProperty("birthday", out var b) && b.ValueKind != JsonValueKind.Null)
+                        {
+                            if (b.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(b.GetString(), out var dt)) birthday = dt.ToUniversalTime();
+                        }
                         var hasJobs = TryGetJobsFromPayload(root, out var jobsRaw);
                         var jobs = EnsureJobs(hasJobs ? jobsRaw : Array.Empty<string>());
                         var clubIdCur = (WebSocketStore.TryGetClub(id, out var ccU) && !string.IsNullOrWhiteSpace(ccU)) ? ccU! : "default";
@@ -728,7 +733,7 @@ public static class WebSocketMiddleware
                             canManage = actorRights.ManageUsers;
                             if (!(isOwner || canManage)) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.add.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.manual.add.fail club={clubIdCur} reason=rights"); continue; }
                             if (HasOwner(jobs) && !isOwner) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.add.fail", message = "Only owner can assign owner" }); app.Logger.LogDebug($"WS user.manual.add.fail club={clubIdCur} reason=assignowner"); continue; }
-                            var created = await efChk.CreateManualStaffEntryAsync(clubIdCur, displayName, jobs);
+                            var created = await efChk.CreateManualStaffEntryAsync(clubIdCur, displayName, jobs, birthday);
                             if (created == null) { await WebSocketStore.SendAsync(ws, new { type = "user.manual.add.fail", message = "Already exists or invalid" }); app.Logger.LogDebug($"WS user.manual.add.fail club={clubIdCur} reason=exists"); continue; }
                             using var scopeEfWs = app.Services.CreateScope();
                             var efWs = scopeEfWs.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
@@ -751,7 +756,7 @@ public static class WebSocketMiddleware
                             {
                                 uid = Util.NewUid();
                             } while (Store.StaffUsers.Values.Any(u => string.Equals(u.Uid, uid, StringComparison.Ordinal)));
-                            var info = new StaffUserInfo { Username = displayName, PasswordHash = string.Empty, Jobs = EnsureJobs(jobs), Role = "power", CreatedAt = DateTimeOffset.UtcNow, Uid = uid, IsManual = true };
+                            var info = new StaffUserInfo { Username = displayName, PasswordHash = string.Empty, Jobs = EnsureJobs(jobs), Role = "power", CreatedAt = DateTimeOffset.UtcNow, Uid = uid, IsManual = true, Birthday = birthday };
                             Store.StaffUsers[displayName] = info;
                             Store.SetJobsForUser(clubIdCur, displayName, info.Jobs);
                             await Persistence.SaveAsync();
@@ -888,6 +893,12 @@ public static class WebSocketMiddleware
                         var hasJobs = TryGetJobsFromPayload(root, out var newJobs);
                         var newJobLabel = hasJobs ? string.Join(",", newJobs) : string.Empty;
                         var newRole = root.TryGetProperty("role", out var r) ? (r.GetString() ?? string.Empty) : string.Empty;
+                        var hasBirthday = root.TryGetProperty("birthday", out var b);
+                        DateTimeOffset? newBirthday = null;
+                        if (hasBirthday && b.ValueKind != JsonValueKind.Null)
+                        {
+                            if (b.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(b.GetString(), out var dt)) newBirthday = dt.ToUniversalTime();
+                        }
                         var clubIdCur = (WebSocketStore.TryGetClub(id, out var ccU) && !string.IsNullOrWhiteSpace(ccU)) ? ccU! : "default";
                         if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(targetUsername)) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Missing token or username" }); continue; }
                         if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Invalid session" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=session target={targetUsername}"); continue; }
@@ -928,6 +939,12 @@ public static class WebSocketMiddleware
                             {
                                 var newRank = MergeRights(rightsDbChk, newJobs).Rank;
                                 if (actorRank <= newRank) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Cannot assign role with equal or higher rank" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=newrank target={targetUsername} job={newJobLabel}"); continue; }
+                            }
+                            if (hasBirthday)
+                            {
+                                var manualInfo = await efChk.GetManualStaffUserAsync(clubIdCur, targetUsername);
+                                if (manualInfo == null || !manualInfo.IsManual) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Birthday update only for manual entries" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=birthdaymanual target={targetUsername}"); continue; }
+                                await efChk.UpdateManualStaffBirthdayAsync(clubIdCur, targetUsername, newBirthday);
                             }
                             if (hasJobs) await efChk.UpdateStaffUserJobsAsync(clubIdCur, targetUsername, newJobs);
                             if (!string.IsNullOrWhiteSpace(newRole)) await efChk.UpdateStaffUserRoleAsync(clubIdCur, targetUsername, newRole);
@@ -978,6 +995,17 @@ public static class WebSocketMiddleware
                             {
                                 var newRankMem = MergeRights(rightsMap, newJobs).Rank;
                                 if (actorRankMem <= newRankMem) { await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Cannot assign role with equal or higher rank" }); app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=newrank mem target={targetUsername} job={newJobLabel}"); continue; }
+                            }
+                            if (hasBirthday)
+                            {
+                                if (!Store.StaffUsers.TryGetValue(targetUsername, out var infoMem) || infoMem == null || !infoMem.IsManual)
+                                {
+                                    await WebSocketStore.SendAsync(ws, new { type = "user.update.fail", message = "Birthday update only for manual entries" });
+                                    app.Logger.LogDebug($"WS user.update.fail club={clubIdCur} reason=birthdaymanual mem target={targetUsername}");
+                                    continue;
+                                }
+                                infoMem.Birthday = newBirthday;
+                                Store.StaffUsers[targetUsername] = infoMem;
                             }
                             if (hasJobs) Store.SetJobsForUser(clubIdCur, targetUsername, newJobs);
                             if (Store.StaffUsers.TryGetValue(targetUsername, out var info))

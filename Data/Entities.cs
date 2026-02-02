@@ -39,6 +39,7 @@ public sealed class StaffUserEntity
     [MaxLength(64)]
     public string Role { get; set; } = "power";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? Birthday { get; set; }
 }
 
 public sealed class StaffUserJobEntity
