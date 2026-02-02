@@ -677,15 +677,15 @@ public sealed class EfStore
             if (string.Equals(j.JobName, "Owner", StringComparison.Ordinal)) rankVal = 10;
             else if (string.Equals(j.JobName, "Unassigned", StringComparison.Ordinal)) rankVal = 0;
             else rankVal = j.Rank <= 0 ? 1 : (j.Rank > 9 ? 9 : j.Rank);
-            dict[j.JobName] = new Rights { AddVip = j.AddVip, RemoveVip = j.RemoveVip, ManageUsers = j.ManageUsers, ManageJobs = j.ManageJobs, EditVipDuration = j.EditVipDuration, AddDj = j.AddDj, RemoveDj = j.RemoveDj, EditShiftPlan = j.EditShiftPlan, Rank = rankVal, ColorHex = j.ColorHex, IconKey = j.IconKey };
+            dict[j.JobName] = new Rights { AddVip = j.AddVip, RemoveVip = j.RemoveVip, ManageUsers = j.ManageUsers, ManageJobs = j.ManageJobs, ManageVenueSettings = j.ManageVenueSettings, EditVipDuration = j.EditVipDuration, AddDj = j.AddDj, RemoveDj = j.RemoveDj, EditShiftPlan = j.EditShiftPlan, Rank = rankVal, ColorHex = j.ColorHex, IconKey = j.IconKey };
         }
         if (!dict.TryGetValue("Owner", out var own))
         {
-            dict["Owner"] = new Rights { AddVip = true, RemoveVip = true, ManageUsers = true, ManageJobs = true, EditVipDuration = true, AddDj = true, RemoveDj = true, EditShiftPlan = true, Rank = 10, ColorHex = dict.TryGetValue("Owner", out var ex) ? (ex.ColorHex ?? "#FFFFFF") : "#FFFFFF", IconKey = dict.TryGetValue("Owner", out var ex2) ? (ex2.IconKey ?? "User") : "User" };
+            dict["Owner"] = new Rights { AddVip = true, RemoveVip = true, ManageUsers = true, ManageJobs = true, ManageVenueSettings = true, EditVipDuration = true, AddDj = true, RemoveDj = true, EditShiftPlan = true, Rank = 10, ColorHex = dict.TryGetValue("Owner", out var ex) ? (ex.ColorHex ?? "#FFFFFF") : "#FFFFFF", IconKey = dict.TryGetValue("Owner", out var ex2) ? (ex2.IconKey ?? "User") : "User" };
         }
         else
         {
-            own.AddVip = true; own.RemoveVip = true; own.ManageUsers = true; own.ManageJobs = true; own.EditVipDuration = true; own.AddDj = true; own.RemoveDj = true; own.EditShiftPlan = true; own.Rank = 10;
+            own.AddVip = true; own.RemoveVip = true; own.ManageUsers = true; own.ManageJobs = true; own.ManageVenueSettings = true; own.EditVipDuration = true; own.AddDj = true; own.RemoveDj = true; own.EditShiftPlan = true; own.Rank = 10;
             dict["Owner"] = own;
         }
         return dict;
@@ -709,6 +709,7 @@ public sealed class EfStore
         j.RemoveVip = isOwner ? true : rights.RemoveVip;
         j.ManageUsers = isOwner ? true : rights.ManageUsers;
         j.ManageJobs = isOwner ? true : rights.ManageJobs;
+        j.ManageVenueSettings = isOwner ? true : rights.ManageVenueSettings;
         j.EditVipDuration = isOwner ? true : rights.EditVipDuration;
         j.AddDj = isOwner ? true : rights.AddDj;
         j.RemoveDj = isOwner ? true : rights.RemoveDj;

@@ -41,6 +41,7 @@ public static class WebSocketMiddleware
             if (r.RemoveVip) res.RemoveVip = true;
             if (r.ManageUsers) res.ManageUsers = true;
             if (r.ManageJobs) res.ManageJobs = true;
+            if (r.ManageVenueSettings) res.ManageVenueSettings = true;
             if (r.EditVipDuration) res.EditVipDuration = true;
             if (r.AddDj) res.AddDj = true;
             if (r.RemoveDj) res.RemoveDj = true;
@@ -53,6 +54,7 @@ public static class WebSocketMiddleware
             res.RemoveVip = true;
             res.ManageUsers = true;
             res.ManageJobs = true;
+            res.ManageVenueSettings = true;
             res.EditVipDuration = true;
             res.AddDj = true;
             res.RemoveDj = true;
@@ -538,28 +540,62 @@ public static class WebSocketMiddleware
                         var clubIdCur = (WebSocketStore.TryGetClub(id, out var cc2) && !string.IsNullOrWhiteSpace(cc2)) ? cc2! : "default";
                         if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = "jobs.rights.fail" }); continue; }
                         bool canManageJobs;
+                        string[] actorJobs;
+                        Rights actorRights;
+                        bool isOwner;
+                        int actorRank;
+                        System.Collections.Generic.Dictionary<string, Rights> rightsMapChk;
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
                             using var scopeEfChk = app.Services.CreateScope();
                             var efChk = scopeEfChk.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
                             var rightsDbChk = await efChk.GetJobRightsAsync(clubIdCur);
-                            var jobsChk = await GetJobsFromDbAsync(efChk, clubIdCur, username);
-                            var rightsChk = MergeRights(rightsDbChk, jobsChk);
-                            canManageJobs = rightsChk.ManageJobs;
+                            actorJobs = await GetJobsFromDbAsync(efChk, clubIdCur, username);
+                            actorRights = MergeRights(rightsDbChk, actorJobs);
+                            isOwner = HasOwner(actorJobs);
+                            actorRank = actorRights.Rank;
+                            canManageJobs = actorRights.ManageJobs;
+                            rightsMapChk = rightsDbChk;
                             if (!canManageJobs) { await WebSocketStore.SendAsync(ws, new { type = "jobs.rights.fail" }); continue; }
                         }
                         else
                         {
-                            var rightsMap = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value);
-                            var jobsChk = GetJobsFromStore(clubIdCur, username);
-                            var rightsChk = MergeRights(rightsMap, jobsChk);
-                            canManageJobs = rightsChk.ManageJobs;
+                            rightsMapChk = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value);
+                            actorJobs = GetJobsFromStore(clubIdCur, username);
+                            actorRights = MergeRights(rightsMapChk, actorJobs);
+                            isOwner = HasOwner(actorJobs);
+                            actorRank = actorRights.Rank;
+                            canManageJobs = actorRights.ManageJobs;
                             if (!canManageJobs) { await WebSocketStore.SendAsync(ws, new { type = "jobs.rights.fail" }); continue; }
+                        }
+                        if (!isOwner)
+                        {
+                            Rights existingRole;
+                            if (!rightsMapChk.TryGetValue(name, out existingRole!)) existingRole = new Rights();
+                            var existingRank = existingRole.Rank;
+                            if (string.Equals(name, "Owner", StringComparison.Ordinal)) existingRank = 10;
+                            else if (string.Equals(name, "Unassigned", StringComparison.Ordinal)) existingRank = 0;
+                            else existingRank = existingRank <= 0 ? 1 : (existingRank > 9 ? 9 : existingRank);
+
+                            var desiredRank = rights.Rank;
+                            if (string.Equals(name, "Owner", StringComparison.Ordinal)) desiredRank = 10;
+                            else if (string.Equals(name, "Unassigned", StringComparison.Ordinal)) desiredRank = 0;
+                            else desiredRank = desiredRank <= 0 ? 1 : (desiredRank > 9 ? 9 : desiredRank);
+
+                            bool isActorRole = false;
+                            for (int i = 0; i < actorJobs.Length; i++)
+                            {
+                                if (string.Equals(actorJobs[i], name, StringComparison.Ordinal)) { isActorRole = true; break; }
+                            }
+                            if (rights.ManageJobs && !existingRole.ManageJobs) { await WebSocketStore.SendAsync(ws, new { type = "jobs.rights.fail" }); continue; }
+                            if (rights.ManageVenueSettings && !existingRole.ManageVenueSettings) { await WebSocketStore.SendAsync(ws, new { type = "jobs.rights.fail" }); continue; }
+                            if (desiredRank > actorRank) { await WebSocketStore.SendAsync(ws, new { type = "jobs.rights.fail" }); continue; }
+                            if (!isActorRole && existingRank > actorRank) { await WebSocketStore.SendAsync(ws, new { type = "jobs.rights.fail" }); continue; }
                         }
                         if (string.Equals(name, "Owner", StringComparison.Ordinal))
                         {
                             var existing = Store.JobRights.TryGetValue(name, out var ex) ? ex : new Rights();
-                            existing.AddVip = true; existing.RemoveVip = true; existing.ManageUsers = true; existing.ManageJobs = true; existing.EditVipDuration = true; existing.AddDj = true; existing.RemoveDj = true; existing.EditShiftPlan = true; existing.Rank = 10;
+                            existing.AddVip = true; existing.RemoveVip = true; existing.ManageUsers = true; existing.ManageJobs = true; existing.ManageVenueSettings = true; existing.EditVipDuration = true; existing.AddDj = true; existing.RemoveDj = true; existing.EditShiftPlan = true; existing.Rank = 10;
                             existing.ColorHex = rights.ColorHex ?? existing.ColorHex ?? "#FFFFFF";
                             existing.IconKey = rights.IconKey ?? existing.IconKey ?? "User";
                             Store.JobRights[name] = existing;
@@ -579,7 +615,7 @@ public static class WebSocketMiddleware
                             {
                                 var rightsDict = await efSvc.GetJobRightsAsync(clubIdCur);
                                 var ex = rightsDict.TryGetValue(name, out var exDb) ? exDb : new Rights();
-                                var merged = new Rights { AddVip = ex.AddVip, RemoveVip = ex.RemoveVip, ManageUsers = ex.ManageUsers, ManageJobs = ex.ManageJobs, EditVipDuration = ex.EditVipDuration, AddDj = true, RemoveDj = true, EditShiftPlan = true, Rank = 10, ColorHex = rights.ColorHex ?? ex.ColorHex ?? "#FFFFFF", IconKey = rights.IconKey ?? ex.IconKey ?? "User" };
+                                var merged = new Rights { AddVip = ex.AddVip, RemoveVip = ex.RemoveVip, ManageUsers = ex.ManageUsers, ManageJobs = ex.ManageJobs, ManageVenueSettings = ex.ManageVenueSettings, EditVipDuration = ex.EditVipDuration, AddDj = true, RemoveDj = true, EditShiftPlan = true, Rank = 10, ColorHex = rights.ColorHex ?? ex.ColorHex ?? "#FFFFFF", IconKey = rights.IconKey ?? ex.IconKey ?? "User" };
                                 await efSvc.UpdateJobRightsAsync(clubIdCur, name, merged);
                             }
                             else
@@ -1179,6 +1215,83 @@ public static class WebSocketMiddleware
                         app.Logger.LogDebug($"WS vip.update.ok club={clubIdCur} op={(type == "vip.add" ? "add" : "remove")} name={entry.CharacterName}@{entry.HomeWorld}");
                         continue;
                     }
+                    if (type == "vip.purge.expired")
+                    {
+                        var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
+                        var clubIdCur = (WebSocketStore.TryGetClub(id, out var cc) && !string.IsNullOrWhiteSpace(cc)) ? cc! : "default";
+                        if (string.IsNullOrWhiteSpace(token)) { await WebSocketStore.SendAsync(ws, new { type = "vip.purge.expired.fail", code = 400, message = "Missing session" }); continue; }
+                        if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = "vip.purge.expired.fail", code = 401, message = "Invalid session" }); continue; }
+                        string[] jobs;
+                        Rights rights;
+                        bool isOwner;
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEfRights = app.Services.CreateScope();
+                            var efSvcRights = scopeEfRights.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            var rightsDb = await efSvcRights.GetJobRightsAsync(clubIdCur);
+                            jobs = await GetJobsFromDbAsync(efSvcRights, clubIdCur, username);
+                            rights = MergeRights(rightsDb, jobs);
+                            isOwner = HasOwner(jobs);
+                        }
+                        else
+                        {
+                            var rightsMap = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value);
+                            jobs = GetJobsFromStore(clubIdCur, username);
+                            rights = MergeRights(rightsMap, jobs);
+                            isOwner = HasOwner(jobs);
+                        }
+                        if (!(rights.RemoveVip || isOwner)) { await WebSocketStore.SendAsync(ws, new { type = "vip.purge.expired.fail", code = 403, message = "No rights" }); continue; }
+                        var now = DateTimeOffset.UtcNow;
+                        var expired = new List<VipEntry>();
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEf = app.Services.CreateScope();
+                            var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            var entries = await efSvc.LoadVipEntriesAsync(clubIdCur) ?? Array.Empty<VipEntry>();
+                            for (int i = 0; i < entries.Length; i++)
+                            {
+                                var entry = entries[i];
+                                if (entry.Duration == 2) continue;
+                                if (!entry.ExpiresAt.HasValue) continue;
+                                if (entry.ExpiresAt.Value <= now) expired.Add(entry);
+                            }
+                            for (int i = 0; i < expired.Count; i++)
+                            {
+                                var entry = expired[i];
+                                await efSvc.PersistRemoveVipAsync(clubIdCur, entry.CharacterName, entry.HomeWorld);
+                            }
+                        }
+                        else
+                        {
+                            if (Store.ClubVipKeys.TryGetValue(clubIdCur, out var keys))
+                            {
+                                foreach (var key in keys.Keys)
+                                {
+                                    if (Store.VipEntries.TryGetValue(key, out var entry))
+                                    {
+                                        if (entry.Duration == 2) continue;
+                                        if (!entry.ExpiresAt.HasValue) continue;
+                                        if (entry.ExpiresAt.Value <= now) expired.Add(entry);
+                                    }
+                                }
+                            }
+                            for (int i = 0; i < expired.Count; i++)
+                            {
+                                var entry = expired[i];
+                                Store.VipEntries.TryRemove(entry.Key, out _);
+                                if (Store.ClubVipKeys.TryGetValue(clubIdCur, out var setVipClubRem)) { setVipClubRem.TryRemove(entry.Key, out _); }
+                            }
+                            await Persistence.SaveAsync();
+                        }
+                        for (int i = 0; i < expired.Count; i++)
+                        {
+                            var entry = expired[i];
+                            await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { op = "remove", entry });
+                        }
+                        await WebSocketStore.SendAsync(ws, new { type = "vip.purge.expired.ok", count = expired.Count });
+                        app.Logger.LogDebug($"WS vip.purge.expired.ok club={clubIdCur} removed={expired.Count}");
+                        continue;
+                    }
                     if (type == "dj.add" || type == "dj.remove")
                     {
                         var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
@@ -1390,19 +1503,24 @@ public static class WebSocketMiddleware
                         var clubIdCur = (WebSocketStore.TryGetClub(id, out var cc) && !string.IsNullOrWhiteSpace(cc)) ? cc! : "default";
                         if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = "club.logo.update.fail" }); continue; }
                         bool isOwner;
+                        Rights rights;
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
                             using var scopeEfChk = app.Services.CreateScope();
                             var efChk = scopeEfChk.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
                             var jobsChk = await GetJobsFromDbAsync(efChk, clubIdCur, username);
+                            var rightsDb = await efChk.GetJobRightsAsync(clubIdCur);
+                            rights = MergeRights(rightsDb, jobsChk);
                             isOwner = HasOwner(jobsChk);
                         }
                         else
                         {
                             var jobsMem = GetJobsFromStore(clubIdCur, username);
+                            var rightsMap = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value);
+                            rights = MergeRights(rightsMap, jobsMem);
                             isOwner = HasOwner(jobsMem);
                         }
-                        if (!isOwner) { await WebSocketStore.SendAsync(ws, new { type = "club.logo.update.fail" }); continue; }
+                        if (!(isOwner || rights.ManageVenueSettings)) { await WebSocketStore.SendAsync(ws, new { type = "club.logo.update.fail" }); continue; }
                         string? processed = null;
                         try
                         {
@@ -1444,19 +1562,24 @@ public static class WebSocketMiddleware
                         var clubIdCur = (WebSocketStore.TryGetClub(id, out var cc) && !string.IsNullOrWhiteSpace(cc)) ? cc! : "default";
                         if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = "club.logo.delete.fail", code = 401 }); continue; }
                         bool isOwner;
+                        Rights rights;
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
                             using var scopeEfChk = app.Services.CreateScope();
                             var efChk = scopeEfChk.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
                             var jobsChk = await GetJobsFromDbAsync(efChk, clubIdCur, username);
+                            var rightsDb = await efChk.GetJobRightsAsync(clubIdCur);
+                            rights = MergeRights(rightsDb, jobsChk);
                             isOwner = HasOwner(jobsChk);
                         }
                         else
                         {
                             var jobsMem = GetJobsFromStore(clubIdCur, username);
+                            var rightsMap = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value);
+                            rights = MergeRights(rightsMap, jobsMem);
                             isOwner = HasOwner(jobsMem);
                         }
-                        if (!isOwner) { await WebSocketStore.SendAsync(ws, new { type = "club.logo.delete.fail", code = 403 }); continue; }
+                        if (!(isOwner || rights.ManageVenueSettings)) { await WebSocketStore.SendAsync(ws, new { type = "club.logo.delete.fail", code = 403 }); continue; }
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
                             using var scopeEf = app.Services.CreateScope();
@@ -1477,6 +1600,25 @@ public static class WebSocketMiddleware
                         var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
                         var clubIdReq = (WebSocketStore.TryGetClub(id, out var cc) && !string.IsNullOrWhiteSpace(cc)) ? cc! : "default";
                         if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = "club.accesskey.fail", code = 401 }); continue; }
+                        bool isOwner;
+                        Rights rights;
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEfChk = app.Services.CreateScope();
+                            var efChk = scopeEfChk.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            var jobsChk = await GetJobsFromDbAsync(efChk, clubIdReq, username);
+                            var rightsDb = await efChk.GetJobRightsAsync(clubIdReq);
+                            rights = MergeRights(rightsDb, jobsChk);
+                            isOwner = HasOwner(jobsChk);
+                        }
+                        else
+                        {
+                            var jobsMem = GetJobsFromStore(clubIdReq, username);
+                            var rightsMap = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value);
+                            rights = MergeRights(rightsMap, jobsMem);
+                            isOwner = HasOwner(jobsMem);
+                        }
+                        if (!(isOwner || rights.ManageVenueSettings)) { await WebSocketStore.SendAsync(ws, new { type = "club.accesskey.fail", code = 403 }); continue; }
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
                             using var scopeEf = app.Services.CreateScope();
@@ -1505,13 +1647,16 @@ public static class WebSocketMiddleware
                         var clubIdCur = (WebSocketStore.TryGetClub(id, out var cc) && !string.IsNullOrWhiteSpace(cc)) ? cc! : "default";
                         if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = "club.accesskey.regenerate.fail", code = 401 }); continue; }
                         bool isOwner;
+                        Rights rights;
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
                             using var scopeEf = app.Services.CreateScope();
                             var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
                             var jobsChk = await GetJobsFromDbAsync(efSvc, clubIdCur, username);
+                            var rightsDb = await efSvc.GetJobRightsAsync(clubIdCur);
+                            rights = MergeRights(rightsDb, jobsChk);
                             isOwner = HasOwner(jobsChk);
-                            if (!isOwner) { await WebSocketStore.SendAsync(ws, new { type = "club.accesskey.regenerate.fail", code = 403 }); continue; }
+                            if (!(isOwner || rights.ManageVenueSettings)) { await WebSocketStore.SendAsync(ws, new { type = "club.accesskey.regenerate.fail", code = 403 }); continue; }
                             var newKey = await efSvc.RegenerateAccessKeyAsync(clubIdCur);
                             if (string.IsNullOrWhiteSpace(newKey)) { await WebSocketStore.SendAsync(ws, new { type = "club.accesskey.regenerate.fail", code = 404 }); continue; }
                             Store.ClubAccessKeysByClub[clubIdCur] = newKey!; Store.ClubAccessKeysByKey[newKey!] = clubIdCur;
@@ -1520,8 +1665,10 @@ public static class WebSocketMiddleware
                         else
                         {
                             var jobsMem = GetJobsFromStore(clubIdCur, username);
+                            var rightsMap = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value);
+                            rights = MergeRights(rightsMap, jobsMem);
                             isOwner = HasOwner(jobsMem);
-                            if (!isOwner) { await WebSocketStore.SendAsync(ws, new { type = "club.accesskey.regenerate.fail", code = 403 }); continue; }
+                            if (!(isOwner || rights.ManageVenueSettings)) { await WebSocketStore.SendAsync(ws, new { type = "club.accesskey.regenerate.fail", code = 403 }); continue; }
                             var newKey = Util.NewUid(24);
                             Store.ClubAccessKeysByClub[clubIdCur] = newKey; Store.ClubAccessKeysByKey[newKey] = clubIdCur;
                             await Persistence.SaveAsync();
@@ -1617,6 +1764,7 @@ public static class WebSocketMiddleware
                             [nameof(Rights.RemoveVip)[0].ToString().ToLowerInvariant() + nameof(Rights.RemoveVip).Substring(1)] = rightsCur.RemoveVip,
                             [nameof(Rights.ManageUsers)[0].ToString().ToLowerInvariant() + nameof(Rights.ManageUsers).Substring(1)] = rightsCur.ManageUsers,
                             [nameof(Rights.ManageJobs)[0].ToString().ToLowerInvariant() + nameof(Rights.ManageJobs).Substring(1)] = rightsCur.ManageJobs,
+                            [nameof(Rights.ManageVenueSettings)[0].ToString().ToLowerInvariant() + nameof(Rights.ManageVenueSettings).Substring(1)] = rightsCur.ManageVenueSettings,
                             [nameof(Rights.EditVipDuration)[0].ToString().ToLowerInvariant() + nameof(Rights.EditVipDuration).Substring(1)] = rightsCur.EditVipDuration,
                             [nameof(Rights.AddDj)[0].ToString().ToLowerInvariant() + nameof(Rights.AddDj).Substring(1)] = rightsCur.AddDj,
                             [nameof(Rights.RemoveDj)[0].ToString().ToLowerInvariant() + nameof(Rights.RemoveDj).Substring(1)] = rightsCur.RemoveDj,
@@ -1784,21 +1932,40 @@ public static class WebSocketMiddleware
                             continue;
                         }
                         bool isOwner;
+                        Rights rights;
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
                             using var scopeEfChk = app.Services.CreateScope();
                             var efChk = scopeEfChk.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
                             var created = await efChk.GetCreatedClubsAsync(usernameDel) ?? Array.Empty<string>();
                             isOwner = Array.IndexOf(created, clubIdDel) >= 0;
+                            if (!isOwner)
+                            {
+                                await WebSocketStore.SendAsync(ws, new { type = "club.delete.fail", code = 401 });
+                                app.Logger.LogDebug($"WS club.delete.fail club={clubIdDel} reason=notowner");
+                                continue;
+                            }
+                            var jobsChk = await GetJobsFromDbAsync(efChk, clubIdDel, usernameDel);
+                            var rightsDb = await efChk.GetJobRightsAsync(clubIdDel);
+                            rights = MergeRights(rightsDb, jobsChk);
                         }
                         else
                         {
                             isOwner = Store.CreatedClubs.TryGetValue(clubIdDel, out var ownerU) && string.Equals(ownerU, usernameDel, StringComparison.Ordinal);
+                            if (!isOwner)
+                            {
+                                await WebSocketStore.SendAsync(ws, new { type = "club.delete.fail", code = 401 });
+                                app.Logger.LogDebug($"WS club.delete.fail club={clubIdDel} reason=notowner");
+                                continue;
+                            }
+                            var jobsMem = GetJobsFromStore(clubIdDel, usernameDel);
+                            var rightsMap = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value);
+                            rights = MergeRights(rightsMap, jobsMem);
                         }
-                        if (!isOwner)
+                        if (!rights.ManageVenueSettings)
                         {
-                            await WebSocketStore.SendAsync(ws, new { type = "club.delete.fail", code = 401 });
-                            app.Logger.LogDebug($"WS club.delete.fail club={clubIdDel} reason=notowner");
+                            await WebSocketStore.SendAsync(ws, new { type = "club.delete.fail", code = 403 });
+                            app.Logger.LogDebug($"WS club.delete.fail club={clubIdDel} reason=rights");
                             continue;
                         }
                         if (string.Equals(clubIdDel, "default", StringComparison.Ordinal))
@@ -1896,18 +2063,25 @@ public static class WebSocketMiddleware
                         var clubIdCur = (WebSocketStore.TryGetClub(id, out var cc) && !string.IsNullOrWhiteSpace(cc)) ? cc! : "default";
                         if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = "club.join.password.fail", code = 401 }); app.Logger.LogDebug("WS club.join.password.fail reason=session"); continue; }
                         bool isOwner;
+                        Rights rights;
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
                             using var scopeEfChk = app.Services.CreateScope();
                             var efChk = scopeEfChk.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
                             var created = await efChk.GetCreatedClubsAsync(username) ?? Array.Empty<string>();
                             isOwner = Array.IndexOf(created, clubIdCur) >= 0;
+                            var jobsChk = await GetJobsFromDbAsync(efChk, clubIdCur, username);
+                            var rightsDb = await efChk.GetJobRightsAsync(clubIdCur);
+                            rights = MergeRights(rightsDb, jobsChk);
                         }
                         else
                         {
                             isOwner = Store.CreatedClubs.TryGetValue(clubIdCur, out var ownerU) && string.Equals(ownerU, username, StringComparison.Ordinal);
+                            var jobsMem = GetJobsFromStore(clubIdCur, username);
+                            var rightsMap = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value);
+                            rights = MergeRights(rightsMap, jobsMem);
                         }
-                        if (!isOwner) { await WebSocketStore.SendAsync(ws, new { type = "club.join.password.fail", code = 403 }); continue; }
+                        if (!rights.ManageVenueSettings) { await WebSocketStore.SendAsync(ws, new { type = "club.join.password.fail", code = 403 }); continue; }
                         var hash = Util.HashPassword(string.Empty, newPassword ?? string.Empty);
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
