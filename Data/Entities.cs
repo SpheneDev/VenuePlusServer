@@ -130,6 +130,8 @@ public sealed class DjEntryEntity
     [MaxLength(256)]
     public string TwitchLink { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? StartAt { get; set; }
+    public DateTimeOffset? EndAt { get; set; }
 }
 
 public sealed class ShiftEntryEntity
@@ -142,6 +144,8 @@ public sealed class ShiftEntryEntity
     [Required]
     [MaxLength(128)]
     public string Title { get; set; } = string.Empty;
+    [MaxLength(128)]
+    public string? DjName { get; set; }
     [MaxLength(15)]
     public string? AssignedUid { get; set; }
     [MaxLength(64)]

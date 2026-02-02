@@ -17,12 +17,15 @@ public sealed class DjEntry
     public string DjName { get; set; } = string.Empty;
     public string TwitchLink { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? StartAt { get; set; }
+    public DateTimeOffset? EndAt { get; set; }
 }
 
 public sealed class ShiftEntry
 {
     public Guid Id { get; set; }
     public string Title { get; set; } = string.Empty;
+    public string? DjName { get; set; }
     public string? AssignedUid { get; set; }
     public string? Job { get; set; }
     public DateTimeOffset StartAt { get; set; } = DateTimeOffset.UtcNow;

@@ -109,7 +109,9 @@ public sealed class EfStore
             {
                 DjName = e.DjName,
                 TwitchLink = e.TwitchLink,
-                CreatedAt = e.CreatedAt
+                CreatedAt = e.CreatedAt,
+                StartAt = e.StartAt,
+                EndAt = e.EndAt
             }).ToArray();
         }
         catch
@@ -127,6 +129,7 @@ public sealed class EfStore
             {
                 Id = e.Id,
                 Title = e.Title,
+                DjName = e.DjName,
                 AssignedUid = e.AssignedUid,
                 Job = e.Job,
                 StartAt = e.StartAt,
@@ -188,7 +191,9 @@ public sealed class EfStore
                     ClubId = clubId,
                     DjName = entry.DjName,
                     TwitchLink = entry.TwitchLink ?? string.Empty,
-                    CreatedAt = entry.CreatedAt
+                    CreatedAt = entry.CreatedAt,
+                    StartAt = entry.StartAt,
+                    EndAt = entry.EndAt
                 });
             }
             else
@@ -196,6 +201,8 @@ public sealed class EfStore
                 var e = await _db.DjEntries.FirstAsync(x => x.ClubId == clubId && x.DjName == entry.DjName);
                 e.TwitchLink = entry.TwitchLink ?? string.Empty;
                 e.CreatedAt = entry.CreatedAt;
+                e.StartAt = entry.StartAt;
+                e.EndAt = entry.EndAt;
                 _db.DjEntries.Update(e);
             }
             await _db.SaveChangesAsync();
@@ -230,6 +237,7 @@ public sealed class EfStore
                     Id = newId,
                     ClubId = clubId,
                     Title = entry.Title ?? string.Empty,
+                    DjName = string.IsNullOrWhiteSpace(entry.DjName) ? null : entry.DjName,
                     AssignedUid = string.IsNullOrWhiteSpace(entry.AssignedUid) ? null : entry.AssignedUid,
                     Job = string.IsNullOrWhiteSpace(entry.Job) ? null : entry.Job,
                     StartAt = entry.StartAt,
@@ -241,6 +249,7 @@ public sealed class EfStore
             {
                 var e = await _db.Shifts.FirstAsync(s => s.ClubId == clubId && s.Id == entry.Id);
                 e.Title = entry.Title ?? string.Empty;
+                e.DjName = string.IsNullOrWhiteSpace(entry.DjName) ? null : entry.DjName;
                 e.AssignedUid = string.IsNullOrWhiteSpace(entry.AssignedUid) ? null : entry.AssignedUid;
                 e.Job = string.IsNullOrWhiteSpace(entry.Job) ? null : entry.Job;
                 e.StartAt = entry.StartAt;
