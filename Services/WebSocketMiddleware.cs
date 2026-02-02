@@ -437,19 +437,22 @@ public static class WebSocketMiddleware
                         {
                             if (Store.StaffUsers.ContainsKey(usernameNew)) { await WebSocketStore.SendAsync(ws, new { type = "register.fail", code = 409 }); continue; }
                         }
-                        var info = new StaffUserInfo { Username = usernameNew, PasswordHash = Util.HashPassword(usernameNew, password), Jobs = Array.Empty<string>(), Role = "power", CreatedAt = DateTimeOffset.UtcNow, Uid = usernameNew };
+                        var recoveryCode = Util.NewUid(24);
+                        var recoveryHash = Util.Sha256(recoveryCode);
+                        var info = new StaffUserInfo { Username = usernameNew, PasswordHash = Util.HashPassword(usernameNew, password), RecoveryCodeHash = recoveryHash, Jobs = Array.Empty<string>(), Role = "power", CreatedAt = DateTimeOffset.UtcNow, Uid = usernameNew };
                         Store.StaffUsers[usernameNew] = info;
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
                             using var scopeEf2 = app.Services.CreateScope();
                             var efSvc2 = scopeEf2.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
                             await efSvc2.CreateBaseUserAsync(usernameNew, info.PasswordHash);
+                            await efSvc2.SetRecoveryCodeHashAsync(usernameNew, recoveryHash);
                         }
                         else
                         {
                             await Persistence.SaveAsync();
                         }
-                        await WebSocketStore.SendAsync(ws, new { type = "register.ok" });
+                        await WebSocketStore.SendAsync(ws, new { type = "register.ok", recoveryCode });
                         continue;
                     }
                     if (type == "session.logout")
