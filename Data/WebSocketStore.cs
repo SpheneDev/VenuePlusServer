@@ -122,4 +122,18 @@ public static class WebSocketStore
             }
         }
     }
+
+    public static (Guid Id, WebSocket Socket)[] GetSocketsForClub(string clubId)
+    {
+        return Sockets.ToArray()
+            .Where(kv => SocketClubs.TryGetValue(kv.Key, out var c) && string.Equals(c, clubId, StringComparison.Ordinal))
+            .Select(kv => (kv.Key, kv.Value))
+            .ToArray();
+    }
+
+    public static string[] GetSessions(Guid id)
+    {
+        if (!SocketSessions.TryGetValue(id, out var set)) return Array.Empty<string>();
+        return set.Keys.ToArray();
+    }
 }
