@@ -546,6 +546,19 @@ public sealed class EfStore
         await _db.SaveChangesAsync();
     }
 
+    public async Task DeleteBaseUserAsync(string username)
+    {
+        var buList = await _db.BaseUsers.ToListAsync();
+        var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
+        if (baseUser == null) return;
+        var members = await _db.StaffUsers.Where(x => x.UserUid == baseUser.Uid).ToListAsync();
+        if (members.Count > 0) _db.StaffUsers.RemoveRange(members);
+        var jobs = await _db.StaffUserJobs.Where(x => x.UserUid == baseUser.Uid).ToListAsync();
+        if (jobs.Count > 0) _db.StaffUserJobs.RemoveRange(jobs);
+        _db.BaseUsers.Remove(baseUser);
+        await _db.SaveChangesAsync();
+    }
+
     public async Task UpdateStaffUserJobsAsync(string clubId, string username, string[] jobs)
     {
         var buList = await _db.BaseUsers.ToListAsync();
