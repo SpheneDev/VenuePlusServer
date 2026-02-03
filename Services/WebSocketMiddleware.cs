@@ -749,6 +749,14 @@ public static class WebSocketMiddleware
                                     var rightsDbUpd = await efChk.GetJobRightsAsync(clubId);
                                     await BroadcastUsersDetailsForClubDbAsync(clubId, list, rightsDbUpd);
                                     var ownersOnly = list.Where(u => HasOwner(EnsureJobs(u.Jobs))).Select(u => u.Username).ToArray();
+                                    if (ownersOnly.Length == 0)
+                                    {
+                                        await efChk.DeleteClubAsync(clubId);
+                                        Store.CreatedClubs.TryRemove(clubId, out _);
+                                        await WebSocketStore.BroadcastToClubAsync(clubId, new { type = "club.deleted" });
+                                        await WebSocketStore.BroadcastAsync(new { type = "membership.removed", username = string.Empty, clubId });
+                                        continue;
+                                    }
                                     if (ownersOnly.Length == 1)
                                     {
                                         var loneOwner = ownersOnly[0];
@@ -822,6 +830,18 @@ public static class WebSocketMiddleware
                                     await WebSocketStore.BroadcastToClubAsync(clubId, new { type = "users.list", users = users.Select(x => x.Username).ToArray() });
                                     await WebSocketStore.BroadcastToClubAsync(clubId, new { type = "users.details", users });
                                     var ownersOnlyMem = users.Where(x => HasOwner(EnsureJobs(x.Jobs))).Select(x => x.Username).ToArray();
+                                    if (ownersOnlyMem.Length == 0)
+                                    {
+                                        var keys = Store.ClubUserJobs.Keys.Where(k => k.StartsWith(clubId + "|", StringComparison.Ordinal)).ToArray();
+                                        foreach (var k in keys) Store.ClubUserJobs.TryRemove(k, out _);
+                                        Store.CreatedClubs.TryRemove(clubId, out _);
+                                        Store.JobRights.Clear();
+                                        Store.VipEntries.Clear();
+                                        await Persistence.SaveAsync();
+                                        await WebSocketStore.BroadcastToClubAsync(clubId, new { type = "club.deleted" });
+                                        await WebSocketStore.BroadcastAsync(new { type = "membership.removed", username = string.Empty, clubId });
+                                        continue;
+                                    }
                                     if (ownersOnlyMem.Length == 1)
                                     {
                                         var loneOwnerMem = ownersOnlyMem[0];
