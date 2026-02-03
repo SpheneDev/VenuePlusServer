@@ -19,6 +19,8 @@ public static class Store
     public static readonly ConcurrentDictionary<string, string> ClubAccessKeysByKey = new(StringComparer.Ordinal);
     public static readonly ConcurrentDictionary<string, string?> ClubLogos = new(StringComparer.Ordinal);
     public static readonly ConcurrentDictionary<string, string> ClubJoinPasswordHashes = new(StringComparer.Ordinal);
+    public static bool MaintenanceMode;
+    public static bool MaintenanceModePendingEnable;
 
     public static string[] GetJobsForUser(string clubId, string username)
     {

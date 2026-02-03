@@ -70,6 +70,7 @@ public class Program
         var app = builder.Build();
         HttpPipeline.UseCommonMiddleware(app);
 
+        Persistence.LoadMaintenanceOnly();
         if (string.IsNullOrWhiteSpace(conn)) Persistence.Load();
         InitializeDefaults(defaultPassConf);
         if (!string.IsNullOrWhiteSpace(conn))

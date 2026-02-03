@@ -286,7 +286,7 @@ public sealed class EfStore
         var jobs = await _db.StaffUserJobs.Where(x => x.ClubId == clubId && x.UserUid == baseUser.Uid).Select(x => x.JobName).ToArrayAsync();
         if (jobs.Length == 0) jobs = new[] { "Unassigned" };
         Array.Sort(jobs, StringComparer.Ordinal);
-        return new StaffUserInfo { Username = _crypto.DecryptString(baseUser.Username), PasswordHash = baseUser.PasswordHash, Jobs = jobs, Role = member.Role, CreatedAt = member.CreatedAt, Uid = baseUser.Uid, Birthday = baseUser.Birthday };
+        return new StaffUserInfo { Username = _crypto.DecryptString(baseUser.Username), PasswordHash = baseUser.PasswordHash, Jobs = jobs, Role = member.Role, CreatedAt = member.CreatedAt, Uid = baseUser.Uid, Birthday = baseUser.Birthday, IsServerAdmin = baseUser.IsServerAdmin };
     }
 
     public async Task<StaffUserInfo?> GetStaffUserByUsernameAsync(string username)
@@ -294,7 +294,7 @@ public sealed class EfStore
         var buList = await _db.BaseUsers.ToListAsync();
         var baseUser = buList.FirstOrDefault(x => string.Equals(_crypto.DecryptString(x.Username), username, StringComparison.Ordinal));
         if (baseUser == null) return null;
-        return new StaffUserInfo { Username = _crypto.DecryptString(baseUser.Username), PasswordHash = baseUser.PasswordHash, Jobs = Array.Empty<string>(), Role = "power", CreatedAt = baseUser.CreatedAt, Uid = baseUser.Uid, Birthday = baseUser.Birthday };
+        return new StaffUserInfo { Username = _crypto.DecryptString(baseUser.Username), PasswordHash = baseUser.PasswordHash, Jobs = Array.Empty<string>(), Role = "power", CreatedAt = baseUser.CreatedAt, Uid = baseUser.Uid, Birthday = baseUser.Birthday, IsServerAdmin = baseUser.IsServerAdmin };
     }
 
     public async Task<string?> GetUsernameByUidAsync(string uid)
@@ -334,6 +334,11 @@ public sealed class EfStore
         {
             return baseUsers.TryGetValue(entry.UserUid, out var bu) ? bu.PasswordHash : string.Empty;
         }
+        bool GetServerAdmin(StaffUserEntity entry)
+        {
+            if (entry.IsManual) return false;
+            return baseUsers.TryGetValue(entry.UserUid, out var bu) && bu.IsServerAdmin;
+        }
         return list.OrderBy(x => GetDisplayName(x), StringComparer.Ordinal).Select(u => new StaffUserInfo
         {
             Username = GetDisplayName(u),
@@ -343,7 +348,8 @@ public sealed class EfStore
             CreatedAt = u.CreatedAt,
             Uid = u.UserUid,
             IsManual = u.IsManual,
-            Birthday = GetBirthday(u)
+            Birthday = GetBirthday(u),
+            IsServerAdmin = GetServerAdmin(u)
         }).ToArray();
     }
 
@@ -363,7 +369,8 @@ public sealed class EfStore
             CreatedAt = entry.CreatedAt,
             Uid = entry.UserUid,
             IsManual = true,
-            Birthday = entry.Birthday
+            Birthday = entry.Birthday,
+            IsServerAdmin = false
         };
     }
 
@@ -385,7 +392,8 @@ public sealed class EfStore
             CreatedAt = member.CreatedAt,
             Uid = member.UserUid,
             IsManual = member.IsManual,
-            Birthday = member.IsManual ? member.Birthday : baseUser?.Birthday
+            Birthday = member.IsManual ? member.Birthday : baseUser?.Birthday,
+            IsServerAdmin = !member.IsManual && baseUser != null && baseUser.IsServerAdmin
         };
     }
 

@@ -18,6 +18,8 @@ public static class Persistence
             if (!System.IO.File.Exists(DataFilePath)) return;
             var json = System.IO.File.ReadAllText(DataFilePath);
             var state = JsonSerializer.Deserialize<ServerState>(json, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }) ?? new ServerState();
+            Store.MaintenanceMode = state.MaintenanceMode;
+            Store.MaintenanceModePendingEnable = state.MaintenanceModePendingEnable;
             Store.VipEntries.Clear();
             foreach (var e in state.VipEntries) Store.VipEntries[e.Key] = e;
             Store.StaffUsers.Clear();
@@ -72,10 +74,52 @@ public static class Persistence
             foreach (var kv in state.ClubAccessKeysByClub) { Store.ClubAccessKeysByClub[kv.Key] = kv.Value; Store.ClubAccessKeysByKey[kv.Value] = kv.Key; }
             Store.ClubLogos.Clear();
             foreach (var kv in state.ClubLogos) Store.ClubLogos[kv.Key] = kv.Value;
+            if (Store.MaintenanceModePendingEnable)
+            {
+                Store.MaintenanceMode = true;
+                Store.MaintenanceModePendingEnable = false;
+                SaveAsync().GetAwaiter().GetResult();
+            }
         }
         catch (Exception ex)
         {
             Trace.WriteLine("Persistence.Load failed: " + ex.Message);
+        }
+    }
+
+    public static void LoadMaintenanceOnly()
+    {
+        try
+        {
+            if (!System.IO.File.Exists(DataFilePath)) return;
+            var json = System.IO.File.ReadAllText(DataFilePath);
+            using var doc = JsonDocument.Parse(json);
+            var active = false;
+            var pending = false;
+            var hasActive = false;
+            var hasPending = false;
+            if (doc.RootElement.TryGetProperty("maintenanceMode", out var m) && (m.ValueKind == JsonValueKind.True || m.ValueKind == JsonValueKind.False))
+            {
+                active = m.GetBoolean();
+                hasActive = true;
+            }
+            if (doc.RootElement.TryGetProperty("maintenanceModePendingEnable", out var p) && (p.ValueKind == JsonValueKind.True || p.ValueKind == JsonValueKind.False))
+            {
+                pending = p.GetBoolean();
+                hasPending = true;
+            }
+            if (hasActive) Store.MaintenanceMode = active;
+            if (hasPending) Store.MaintenanceModePendingEnable = pending;
+            if (Store.MaintenanceModePendingEnable)
+            {
+                Store.MaintenanceMode = true;
+                Store.MaintenanceModePendingEnable = false;
+                SaveMaintenanceStateAsync(Store.MaintenanceMode, Store.MaintenanceModePendingEnable).GetAwaiter().GetResult();
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine("Persistence.LoadMaintenanceOnly failed: " + ex.Message);
         }
     }
 
@@ -105,7 +149,9 @@ public static class Persistence
                 JobRights = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value),
                 ClubUserJobs = clubUserJobs,
                 ClubAccessKeysByClub = Store.ClubAccessKeysByClub.ToDictionary(kv => kv.Key, kv => kv.Value),
-                ClubLogos = Store.ClubLogos.ToDictionary(kv => kv.Key, kv => kv.Value)
+                ClubLogos = Store.ClubLogos.ToDictionary(kv => kv.Key, kv => kv.Value),
+                MaintenanceMode = Store.MaintenanceMode,
+                MaintenanceModePendingEnable = Store.MaintenanceModePendingEnable
             };
             var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = false });
             System.IO.File.WriteAllText(DataFilePath, json);
@@ -113,6 +159,36 @@ public static class Persistence
         catch (Exception ex)
         {
             Trace.WriteLine("Persistence.Save failed: " + ex.Message);
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    public static async Task SaveMaintenanceStateAsync(bool active, bool pendingEnable)
+    {
+        await Gate.WaitAsync();
+        try
+        {
+            ServerState state;
+            if (System.IO.File.Exists(DataFilePath))
+            {
+                var jsonIn = System.IO.File.ReadAllText(DataFilePath);
+                state = JsonSerializer.Deserialize<ServerState>(jsonIn, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }) ?? new ServerState();
+            }
+            else
+            {
+                state = new ServerState();
+            }
+            state.MaintenanceMode = active;
+            state.MaintenanceModePendingEnable = pendingEnable;
+            var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = false });
+            System.IO.File.WriteAllText(DataFilePath, json);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine("Persistence.SaveMaintenanceOnly failed: " + ex.Message);
         }
         finally
         {

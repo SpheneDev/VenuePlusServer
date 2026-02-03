@@ -52,6 +52,7 @@ public sealed class StaffUserInfo
     public string[] Jobs { get; set; } = Array.Empty<string>();
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? Birthday { get; set; }
+    public bool IsServerAdmin { get; set; }
     public string Role { get; set; } = "power";
     public string Uid { get; set; } = string.Empty;
     public bool IsManual { get; set; }
@@ -88,4 +89,6 @@ public sealed class ServerState
     public System.Collections.Generic.Dictionary<string, string[]> ClubUserJobs { get; set; } = new System.Collections.Generic.Dictionary<string, string[]>(System.StringComparer.Ordinal);
     public System.Collections.Generic.Dictionary<string, string> ClubAccessKeysByClub { get; set; } = new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal);
     public System.Collections.Generic.Dictionary<string, string?> ClubLogos { get; set; } = new System.Collections.Generic.Dictionary<string, string?>(System.StringComparer.Ordinal);
+    public bool MaintenanceMode { get; set; }
+    public bool MaintenanceModePendingEnable { get; set; }
 }

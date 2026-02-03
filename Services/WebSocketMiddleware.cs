@@ -15,6 +15,10 @@ namespace VenuePlus.Server;
 
 public static class WebSocketMiddleware
 {
+    private static readonly object _adminStateLock = new();
+    private static System.Threading.CancellationTokenSource? _shutdownCts;
+    private static System.Threading.Tasks.Task? _shutdownTask;
+
     private static string[] EnsureJobs(string[] jobs)
     {
         if (jobs.Length == 0) return new[] { "Unassigned" };
@@ -179,6 +183,33 @@ public static class WebSocketMiddleware
         }
         Array.Sort(arr, StringComparer.Ordinal);
         return arr;
+    }
+
+    private static async System.Threading.Tasks.Task<bool> IsServerAdminAsync(WebApplication app, string? conn, string username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return false;
+        if (!string.IsNullOrWhiteSpace(conn))
+        {
+            using var scopeEf = app.Services.CreateScope();
+            var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+            var info = await efSvc.GetStaffUserByUsernameAsync(username);
+            return info?.IsServerAdmin ?? false;
+        }
+        Store.StaffUsers.TryGetValue(username, out var infoMem);
+        return infoMem != null && infoMem.IsServerAdmin;
+    }
+
+    private static string BuildAnnouncementMessage(string baseMessage, int minutesLeft, bool restart)
+    {
+        if (minutesLeft <= 0)
+        {
+            if (string.IsNullOrWhiteSpace(baseMessage)) return restart ? "Server is restarting now." : "Server is shutting down now.";
+            return baseMessage;
+        }
+        var action = restart ? "restart" : "shutdown";
+        var suffix = $"Server will {action} in {minutesLeft} minutes.";
+        if (string.IsNullOrWhiteSpace(baseMessage)) return suffix;
+        return baseMessage + " - " + suffix;
     }
 
     private static async System.Threading.Tasks.Task BroadcastUsersDetailsForClubDbAsync(string clubId, VenuePlus.Server.Services.EfStore efSvc)
@@ -381,6 +412,16 @@ public static class WebSocketMiddleware
                         if (info == null) { await WebSocketStore.SendAsync(ws, new { type = "login.fail" }); app.Logger.LogDebug($"WS login.fail user={username} club={clubIdLogin} reason=notfound"); continue; }
                         var ok = Util.VerifyPassword(username, password, info.PasswordHash);
                         if (!ok) { await WebSocketStore.SendAsync(ws, new { type = "login.fail" }); app.Logger.LogDebug($"WS login.fail user={username} club={clubIdLogin} reason=password"); continue; }
+                        if (Store.MaintenanceMode)
+                        {
+                            var isAdmin = await IsServerAdminAsync(app, conn, username);
+                            if (!isAdmin)
+                            {
+                                await WebSocketStore.SendAsync(ws, new { type = "login.fail", message = "Maintenance mode active" });
+                                app.Logger.LogDebug($"WS login.fail user={username} club={clubIdLogin} reason=maintenance");
+                                continue;
+                            }
+                        }
                         Store.StaffUsers[username] = info;
                         var token = Util.NewToken();
                         Store.StaffSessions[token] = username;
@@ -425,6 +466,11 @@ public static class WebSocketMiddleware
                         var password = root.TryGetProperty("password", out var pw) ? (pw.GetString() ?? string.Empty) : string.Empty;
                         var usernameNew = (string.IsNullOrWhiteSpace(characterName) || string.IsNullOrWhiteSpace(homeWorld)) ? string.Empty : (characterName + "@" + homeWorld);
                         if (string.IsNullOrWhiteSpace(usernameNew) || string.IsNullOrWhiteSpace(password)) { await WebSocketStore.SendAsync(ws, new { type = "register.fail", code = 400 }); continue; }
+                        if (Store.MaintenanceMode)
+                        {
+                            await WebSocketStore.SendAsync(ws, new { type = "register.fail", code = 403, message = "Maintenance mode active" });
+                            continue;
+                        }
                         if (!LoginRateLimiter.Allow("reg|" + usernameNew)) { await WebSocketStore.SendAsync(ws, new { type = "register.fail", code = 429 }); continue; }
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
@@ -1923,6 +1969,130 @@ public static class WebSocketMiddleware
                         }
                         continue;
                     }
+                    if (type == "server.announcement")
+                    {
+                        var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
+                        var message = root.TryGetProperty("message", out var m) ? (m.GetString() ?? string.Empty) : string.Empty;
+                        if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(message)) { await WebSocketStore.SendAsync(ws, new { type = "server.announcement.fail", message = "Missing token or message" }); continue; }
+                        if (!Util.ValidateSession(token, out var usernameReq)) { await WebSocketStore.SendAsync(ws, new { type = "server.announcement.fail", message = "Invalid session" }); continue; }
+                        var isAdmin = await IsServerAdminAsync(app, conn, usernameReq);
+                        if (!isAdmin) { await WebSocketStore.SendAsync(ws, new { type = "server.announcement.fail", message = "No rights" }); continue; }
+                        await WebSocketStore.BroadcastAsync(new { type = "server.announcement", message });
+                        await WebSocketStore.SendAsync(ws, new { type = "server.announcement.ok" });
+                        continue;
+                    }
+                    if (type == "maintenance.mode.request")
+                    {
+                        var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
+                        if (string.IsNullOrWhiteSpace(token)) { await WebSocketStore.SendAsync(ws, new { type = "maintenance.mode.status.fail", message = "Missing token" }); continue; }
+                        if (!Util.ValidateSession(token, out var usernameReq)) { await WebSocketStore.SendAsync(ws, new { type = "maintenance.mode.status.fail", message = "Invalid session" }); continue; }
+                        var isAdmin = await IsServerAdminAsync(app, conn, usernameReq);
+                        if (!isAdmin) { await WebSocketStore.SendAsync(ws, new { type = "maintenance.mode.status.fail", message = "No rights" }); continue; }
+                        await WebSocketStore.SendAsync(ws, new { type = "maintenance.mode.status", active = Store.MaintenanceMode, pending = Store.MaintenanceModePendingEnable });
+                        continue;
+                    }
+                    if (type == "maintenance.mode.set")
+                    {
+                        var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
+                        if (string.IsNullOrWhiteSpace(token)) { await WebSocketStore.SendAsync(ws, new { type = "maintenance.mode.set.fail", message = "Missing token" }); continue; }
+                        if (!Util.ValidateSession(token, out var usernameReq)) { await WebSocketStore.SendAsync(ws, new { type = "maintenance.mode.set.fail", message = "Invalid session" }); continue; }
+                        var isAdmin = await IsServerAdminAsync(app, conn, usernameReq);
+                        if (!isAdmin) { await WebSocketStore.SendAsync(ws, new { type = "maintenance.mode.set.fail", message = "No rights" }); continue; }
+                        if (!root.TryGetProperty("enabled", out var enabledEl) || (enabledEl.ValueKind != JsonValueKind.True && enabledEl.ValueKind != JsonValueKind.False))
+                        {
+                            await WebSocketStore.SendAsync(ws, new { type = "maintenance.mode.set.fail", message = "Missing enabled flag" });
+                            continue;
+                        }
+                        var enabled = enabledEl.GetBoolean();
+                        if (enabled)
+                        {
+                            if (!Store.MaintenanceMode)
+                            {
+                                Store.MaintenanceModePendingEnable = true;
+                            }
+                            else
+                            {
+                                Store.MaintenanceModePendingEnable = false;
+                            }
+                        }
+                        else
+                        {
+                            Store.MaintenanceMode = false;
+                            Store.MaintenanceModePendingEnable = false;
+                        }
+                        await Persistence.SaveMaintenanceStateAsync(Store.MaintenanceMode, Store.MaintenanceModePendingEnable);
+                        await WebSocketStore.SendAsync(ws, new { type = "maintenance.mode.set.ok", active = Store.MaintenanceMode, pending = Store.MaintenanceModePendingEnable });
+                        continue;
+                    }
+                    if (type == "server.shutdown" || type == "server.restart")
+                    {
+                        var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
+                        if (string.IsNullOrWhiteSpace(token)) { await WebSocketStore.SendAsync(ws, new { type = type == "server.restart" ? "server.restart.fail" : "server.shutdown.fail", message = "Missing token" }); continue; }
+                        if (!Util.ValidateSession(token, out var usernameReq)) { await WebSocketStore.SendAsync(ws, new { type = type == "server.restart" ? "server.restart.fail" : "server.shutdown.fail", message = "Invalid session" }); continue; }
+                        var isAdmin = await IsServerAdminAsync(app, conn, usernameReq);
+                        if (!isAdmin) { await WebSocketStore.SendAsync(ws, new { type = type == "server.restart" ? "server.restart.fail" : "server.shutdown.fail", message = "No rights" }); continue; }
+                        var message = root.TryGetProperty("message", out var m) ? (m.GetString() ?? string.Empty) : string.Empty;
+                        var minutesList = new System.Collections.Generic.List<int>();
+                        if (root.TryGetProperty("minutes", out var minsEl) && minsEl.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var el in minsEl.EnumerateArray())
+                            {
+                                if (el.ValueKind != JsonValueKind.Number) continue;
+                                if (el.TryGetInt32(out var v) && v > 0 && v <= 1440) minutesList.Add(v);
+                            }
+                        }
+                        var isRestart = type == "server.restart";
+                        var minutesSet = new System.Collections.Generic.HashSet<int>();
+                        for (int i = 0; i < minutesList.Count; i++) minutesSet.Add(minutesList[i]);
+                        var minutes = new int[minutesSet.Count];
+                        int idx = 0;
+                        foreach (var v in minutesSet) { minutes[idx] = v; idx++; }
+                        Array.Sort(minutes, (a, b) => b.CompareTo(a));
+                        lock (_adminStateLock)
+                        {
+                            if (_shutdownCts != null)
+                            {
+                                try { _shutdownCts.Cancel(); } catch { }
+                                _shutdownCts.Dispose();
+                                _shutdownCts = null;
+                            }
+                            _shutdownCts = new System.Threading.CancellationTokenSource();
+                            var ct = _shutdownCts.Token;
+                            _shutdownTask = System.Threading.Tasks.Task.Run(async () =>
+                            {
+                                try
+                                {
+                                    var now = DateTimeOffset.UtcNow;
+                                    var maxMinutes = minutes.Length > 0 ? minutes[0] : 0;
+                                    var shutdownAt = now.AddMinutes(maxMinutes);
+                                    for (int i = 0; i < minutes.Length; i++)
+                                    {
+                                        var announceAt = shutdownAt.AddMinutes(-minutes[i]);
+                                        var delay = announceAt - DateTimeOffset.UtcNow;
+                                        if (delay > TimeSpan.Zero) await System.Threading.Tasks.Task.Delay(delay, ct);
+                                        if (ct.IsCancellationRequested) return;
+                                        var msgOut = BuildAnnouncementMessage(message, minutes[i], isRestart);
+                                        await WebSocketStore.BroadcastAsync(new { type = "server.announcement", message = msgOut });
+                                    }
+                                    var finalDelay = shutdownAt - DateTimeOffset.UtcNow;
+                                    if (finalDelay > TimeSpan.Zero) await System.Threading.Tasks.Task.Delay(finalDelay, ct);
+                                    if (ct.IsCancellationRequested) return;
+                                    var finalMsg = BuildAnnouncementMessage(message, 0, isRestart);
+                                    await WebSocketStore.BroadcastAsync(new { type = "server.announcement", message = finalMsg });
+                                    await System.Threading.Tasks.Task.Delay(250, ct);
+                                    if (ct.IsCancellationRequested) return;
+                                    await WebSocketStore.CloseAllAsync();
+                                    Store.StaffSessions.Clear();
+                                    Store.StaffSessionExpiry.Clear();
+                                    app.Lifetime.StopApplication();
+                                }
+                                catch (System.Threading.Tasks.TaskCanceledException) { }
+                                catch (Exception ex) { app.Logger.LogDebug($"WS server shutdown schedule failed: {ex.Message}"); }
+                            }, ct);
+                        }
+                        await WebSocketStore.SendAsync(ws, new { type = isRestart ? "server.restart.ok" : "server.shutdown.ok" });
+                        continue;
+                    }
                     if (type == "user.self.rights.request")
                     {
                         var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
@@ -1965,19 +2135,22 @@ public static class WebSocketMiddleware
                     if (type == "user.self.profile.request")
                     {
                         var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
-                        if (!Util.ValidateSession(token, out var usernameReq)) { await WebSocketStore.SendAsync(ws, new { type = "user.self.profile", username = string.Empty, uid = string.Empty }); continue; }
+                        if (!Util.ValidateSession(token, out var usernameReq)) { await WebSocketStore.SendAsync(ws, new { type = "user.self.profile", username = string.Empty, uid = string.Empty, isServerAdmin = false }); continue; }
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
                             using var scopeEf = app.Services.CreateScope();
                             var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
                             var info = await efSvc.GetStaffUserByUsernameAsync(usernameReq);
                             var uid = info?.Uid ?? string.Empty;
-                            await WebSocketStore.SendAsync(ws, new { type = "user.self.profile", username = usernameReq, uid });
+                            var isServerAdmin = info?.IsServerAdmin ?? false;
+                            await WebSocketStore.SendAsync(ws, new { type = "user.self.profile", username = usernameReq, uid, isServerAdmin });
                         }
                         else
                         {
-                            var uidMem = (Store.StaffUsers.TryGetValue(usernameReq, out var infoMem) && infoMem != null && !string.IsNullOrWhiteSpace(infoMem.Uid)) ? infoMem.Uid : usernameReq;
-                            await WebSocketStore.SendAsync(ws, new { type = "user.self.profile", username = usernameReq, uid = uidMem });
+                            Store.StaffUsers.TryGetValue(usernameReq, out var infoMem);
+                            var uidMem = (infoMem != null && !string.IsNullOrWhiteSpace(infoMem.Uid)) ? infoMem.Uid : usernameReq;
+                            var isServerAdmin = infoMem != null && infoMem.IsServerAdmin;
+                            await WebSocketStore.SendAsync(ws, new { type = "user.self.profile", username = usernameReq, uid = uidMem, isServerAdmin });
                         }
                         continue;
                     }
