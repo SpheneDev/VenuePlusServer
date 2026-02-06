@@ -43,7 +43,9 @@ public static class WebSocketMiddleware
             if (!rightsMap.TryGetValue(jobs[i], out var r)) continue;
             if (r.AddVip) res.AddVip = true;
             if (r.RemoveVip) res.RemoveVip = true;
+            if (r.EditVipHomeWorld) res.EditVipHomeWorld = true;
             if (r.ManageUsers) res.ManageUsers = true;
+            if (r.DeleteStaffMember) res.DeleteStaffMember = true;
             if (r.ManageJobs) res.ManageJobs = true;
             if (r.ManageVenueSettings) res.ManageVenueSettings = true;
             if (r.EditVipDuration) res.EditVipDuration = true;
@@ -56,7 +58,9 @@ public static class WebSocketMiddleware
         {
             res.AddVip = true;
             res.RemoveVip = true;
+            res.EditVipHomeWorld = true;
             res.ManageUsers = true;
+            res.DeleteStaffMember = true;
             res.ManageJobs = true;
             res.ManageVenueSettings = true;
             res.EditVipDuration = true;
@@ -680,7 +684,7 @@ public static class WebSocketMiddleware
                         if (string.Equals(name, "Owner", StringComparison.Ordinal))
                         {
                             var existing = Store.JobRights.TryGetValue(name, out var ex) ? ex : new Rights();
-                            existing.AddVip = true; existing.RemoveVip = true; existing.ManageUsers = true; existing.ManageJobs = true; existing.ManageVenueSettings = true; existing.EditVipDuration = true; existing.AddDj = true; existing.RemoveDj = true; existing.EditShiftPlan = true; existing.Rank = 10;
+                                existing.AddVip = true; existing.RemoveVip = true; existing.EditVipHomeWorld = true; existing.ManageUsers = true; existing.DeleteStaffMember = true; existing.ManageJobs = true; existing.ManageVenueSettings = true; existing.EditVipDuration = true; existing.AddDj = true; existing.RemoveDj = true; existing.EditShiftPlan = true; existing.Rank = 10;
                             existing.ColorHex = rights.ColorHex ?? existing.ColorHex ?? "#FFFFFF";
                             existing.IconKey = rights.IconKey ?? existing.IconKey ?? "User";
                             Store.JobRights[name] = existing;
@@ -700,7 +704,7 @@ public static class WebSocketMiddleware
                             {
                                 var rightsDict = await efSvc.GetJobRightsAsync(clubIdCur);
                                 var ex = rightsDict.TryGetValue(name, out var exDb) ? exDb : new Rights();
-                                var merged = new Rights { AddVip = ex.AddVip, RemoveVip = ex.RemoveVip, ManageUsers = ex.ManageUsers, ManageJobs = ex.ManageJobs, ManageVenueSettings = ex.ManageVenueSettings, EditVipDuration = ex.EditVipDuration, AddDj = true, RemoveDj = true, EditShiftPlan = true, Rank = 10, ColorHex = rights.ColorHex ?? ex.ColorHex ?? "#FFFFFF", IconKey = rights.IconKey ?? ex.IconKey ?? "User" };
+                                var merged = new Rights { AddVip = ex.AddVip, RemoveVip = ex.RemoveVip, EditVipHomeWorld = ex.EditVipHomeWorld, ManageUsers = ex.ManageUsers, DeleteStaffMember = ex.DeleteStaffMember, ManageJobs = ex.ManageJobs, ManageVenueSettings = ex.ManageVenueSettings, EditVipDuration = ex.EditVipDuration, AddDj = true, RemoveDj = true, EditShiftPlan = true, Rank = 10, ColorHex = rights.ColorHex ?? ex.ColorHex ?? "#FFFFFF", IconKey = rights.IconKey ?? ex.IconKey ?? "User" };
                                 await efSvc.UpdateJobRightsAsync(clubIdCur, name, merged);
                             }
                             else
@@ -749,8 +753,8 @@ public static class WebSocketMiddleware
                                 var actorJobs = await GetJobsFromDbAsync(efChk, clubIdCur, username);
                                 var actorRights = MergeRights(rightsDbChk, actorJobs);
                                 var isOwner = HasOwner(actorJobs);
-                                var canManage = actorRights.ManageUsers;
-                                if (!(isOwner || canManage)) { await WebSocketStore.SendAsync(ws, new { type = "user.delete.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.delete.fail club={clubIdCur} reason=rights target={targetUsername}"); continue; }
+                                var canDelete = actorRights.DeleteStaffMember;
+                                if (!(isOwner || canDelete)) { await WebSocketStore.SendAsync(ws, new { type = "user.delete.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.delete.fail club={clubIdCur} reason=rights target={targetUsername}"); continue; }
                                 var targetRights = MergeRights(rightsDbChk, targetJobs);
                                 var actorRankDel = actorRights.Rank;
                                 var targetRankDel = targetRights.Rank;
@@ -822,8 +826,8 @@ public static class WebSocketMiddleware
                                 var actorJobs = GetJobsFromStore(clubIdCur, username);
                                 var actorRights = MergeRights(rightsMap, actorJobs);
                                 var isOwnerMem = HasOwner(actorJobs);
-                                var canManageMem = actorRights.ManageUsers;
-                                if (!(isOwnerMem || canManageMem)) { await WebSocketStore.SendAsync(ws, new { type = "user.delete.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.delete.fail club={clubIdCur} reason=rights mem target={targetUsername}"); continue; }
+                                var canDeleteMem = actorRights.DeleteStaffMember;
+                                if (!(isOwnerMem || canDeleteMem)) { await WebSocketStore.SendAsync(ws, new { type = "user.delete.fail", message = "No rights" }); app.Logger.LogDebug($"WS user.delete.fail club={clubIdCur} reason=rights mem target={targetUsername}"); continue; }
                                 var targetRightsMem = MergeRights(rightsMap, targetJobs);
                                 var actorRankDelMem = actorRights.Rank;
                                 var targetRankDelMem = targetRightsMem.Rank;
@@ -1368,6 +1372,121 @@ public static class WebSocketMiddleware
                             await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { type = "jobs.list", jobs = Store.JobRights.Keys.OrderBy(j => j, StringComparer.Ordinal).ToArray() });
                         }
                         await WebSocketStore.SendAsync(ws, new { type = type == "job.add" ? "job.add.ok" : "job.delete.ok" });
+                        continue;
+                    }
+                    if (type == "vip.homeworld.update")
+                    {
+                        var token = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
+                        var characterName = root.TryGetProperty("characterName", out var cn) ? (cn.GetString() ?? string.Empty) : string.Empty;
+                        var oldHomeWorld = root.TryGetProperty("oldHomeWorld", out var ohw) ? (ohw.GetString() ?? string.Empty) : string.Empty;
+                        var newHomeWorld = root.TryGetProperty("newHomeWorld", out var nhw) ? (nhw.GetString() ?? string.Empty) : string.Empty;
+                        var clubIdCur = (WebSocketStore.TryGetClub(id, out var cc) && !string.IsNullOrWhiteSpace(cc)) ? cc! : "default";
+                        if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(characterName) || string.IsNullOrWhiteSpace(oldHomeWorld) || string.IsNullOrWhiteSpace(newHomeWorld))
+                        {
+                            await WebSocketStore.SendAsync(ws, new { type = "vip.update.fail" });
+                            app.Logger.LogDebug($"WS vip.update.fail club={clubIdCur} reason=invalid op=homeworld");
+                            continue;
+                        }
+                        if (!Util.ValidateSession(token, out var username))
+                        {
+                            await WebSocketStore.SendAsync(ws, new { type = "vip.update.fail" });
+                            app.Logger.LogDebug($"WS vip.update.fail club={clubIdCur} reason=session op=homeworld");
+                            continue;
+                        }
+                        if (string.Equals(oldHomeWorld, newHomeWorld, StringComparison.Ordinal))
+                        {
+                            await WebSocketStore.SendAsync(ws, new { type = "vip.update.ok" });
+                            continue;
+                        }
+                        string[] jobs;
+                        Rights rights;
+                        bool isOwner;
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEfRights = app.Services.CreateScope();
+                            var efSvcRights = scopeEfRights.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            var rightsDb = await efSvcRights.GetJobRightsAsync(clubIdCur);
+                            jobs = await GetJobsFromDbAsync(efSvcRights, clubIdCur, username);
+                            rights = MergeRights(rightsDb, jobs);
+                            isOwner = HasOwner(jobs);
+                        }
+                        else
+                        {
+                            var rightsMap = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value);
+                            jobs = GetJobsFromStore(clubIdCur, username);
+                            rights = MergeRights(rightsMap, jobs);
+                            isOwner = HasOwner(jobs);
+                        }
+                        if (!(rights.EditVipHomeWorld || isOwner))
+                        {
+                            await WebSocketStore.SendAsync(ws, new { type = "vip.update.fail" });
+                            app.Logger.LogDebug($"WS vip.update.fail club={clubIdCur} reason=rights op=homeworld name={characterName}@{oldHomeWorld}");
+                            continue;
+                        }
+                        VipEntry? existing = null;
+                        bool newExists = false;
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEf = app.Services.CreateScope();
+                            var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            var list = await efSvc.LoadVipEntriesAsync(clubIdCur) ?? Array.Empty<VipEntry>();
+                            for (int i = 0; i < list.Length; i++)
+                            {
+                                var entry = list[i];
+                                if (string.Equals(entry.CharacterName, characterName, StringComparison.Ordinal) && string.Equals(entry.HomeWorld, oldHomeWorld, StringComparison.Ordinal))
+                                {
+                                    existing = entry;
+                                    break;
+                                }
+                            }
+                            newExists = await efSvc.ExistsVipAsync(clubIdCur, characterName, newHomeWorld);
+                        }
+                        else
+                        {
+                            var oldKey = characterName + "@" + oldHomeWorld;
+                            if (Store.VipEntries.TryGetValue(oldKey, out var entry)) existing = entry;
+                            var newKey = characterName + "@" + newHomeWorld;
+                            newExists = Store.VipEntries.ContainsKey(newKey);
+                        }
+                        if (existing == null)
+                        {
+                            await WebSocketStore.SendAsync(ws, new { type = "vip.update.fail" });
+                            app.Logger.LogDebug($"WS vip.update.fail club={clubIdCur} reason=missing op=homeworld name={characterName}@{oldHomeWorld}");
+                            continue;
+                        }
+                        if (newExists)
+                        {
+                            await WebSocketStore.SendAsync(ws, new { type = "vip.update.fail" });
+                            app.Logger.LogDebug($"WS vip.update.fail club={clubIdCur} reason=exists op=homeworld name={characterName}@{newHomeWorld}");
+                            continue;
+                        }
+                        var updated = new VipEntry
+                        {
+                            CharacterName = existing.CharacterName,
+                            HomeWorld = newHomeWorld,
+                            CreatedAt = existing.CreatedAt,
+                            ExpiresAt = existing.ExpiresAt,
+                            Duration = existing.Duration
+                        };
+                        Store.VipEntries.TryRemove(existing.Key, out _);
+                        Store.VipEntries[updated.Key] = updated;
+                        if (Store.ClubVipKeys.TryGetValue(clubIdCur, out var setVipClub))
+                        {
+                            setVipClub.TryRemove(existing.Key, out _);
+                            setVipClub[updated.Key] = 1;
+                        }
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEf = app.Services.CreateScope();
+                            var efSvc = scopeEf.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            await efSvc.PersistRemoveVipAsync(clubIdCur, existing.CharacterName, existing.HomeWorld);
+                            await efSvc.PersistAddVipAsync(clubIdCur, updated);
+                        }
+                        if (string.IsNullOrWhiteSpace(conn)) await Persistence.SaveAsync();
+                        await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { op = "remove", entry = existing });
+                        await WebSocketStore.BroadcastToClubAsync(clubIdCur, new { op = "add", entry = updated });
+                        await WebSocketStore.SendAsync(ws, new { type = "vip.update.ok" });
+                        app.Logger.LogDebug($"WS vip.update.ok club={clubIdCur} op=homeworld name={characterName}@{oldHomeWorld}->{newHomeWorld}");
                         continue;
                     }
                     if (type == "vip.add" || type == "vip.remove")
@@ -2121,7 +2240,9 @@ public static class WebSocketMiddleware
                         {
                             [nameof(Rights.AddVip)[0].ToString().ToLowerInvariant() + nameof(Rights.AddVip).Substring(1)] = rightsCur.AddVip,
                             [nameof(Rights.RemoveVip)[0].ToString().ToLowerInvariant() + nameof(Rights.RemoveVip).Substring(1)] = rightsCur.RemoveVip,
+                            [nameof(Rights.EditVipHomeWorld)[0].ToString().ToLowerInvariant() + nameof(Rights.EditVipHomeWorld).Substring(1)] = rightsCur.EditVipHomeWorld,
                             [nameof(Rights.ManageUsers)[0].ToString().ToLowerInvariant() + nameof(Rights.ManageUsers).Substring(1)] = rightsCur.ManageUsers,
+                            [nameof(Rights.DeleteStaffMember)[0].ToString().ToLowerInvariant() + nameof(Rights.DeleteStaffMember).Substring(1)] = rightsCur.DeleteStaffMember,
                             [nameof(Rights.ManageJobs)[0].ToString().ToLowerInvariant() + nameof(Rights.ManageJobs).Substring(1)] = rightsCur.ManageJobs,
                             [nameof(Rights.ManageVenueSettings)[0].ToString().ToLowerInvariant() + nameof(Rights.ManageVenueSettings).Substring(1)] = rightsCur.ManageVenueSettings,
                             [nameof(Rights.EditVipDuration)[0].ToString().ToLowerInvariant() + nameof(Rights.EditVipDuration).Substring(1)] = rightsCur.EditVipDuration,

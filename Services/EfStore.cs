@@ -29,7 +29,7 @@ public sealed class EfStore
                 var e = new JobRightEntity { ClubId = clubId, JobName = n };
                 if (string.Equals(n, "Owner", StringComparison.Ordinal))
                 {
-                    e.AddVip = true; e.RemoveVip = true; e.ManageUsers = true; e.ManageJobs = true; e.EditVipDuration = true; e.AddDj = true; e.RemoveDj = true;
+                    e.AddVip = true; e.RemoveVip = true; e.EditVipHomeWorld = true; e.ManageUsers = true; e.DeleteStaffMember = true; e.ManageJobs = true; e.ManageVenueSettings = true; e.EditVipDuration = true; e.AddDj = true; e.RemoveDj = true; e.EditShiftPlan = true;
                     e.Rank = 10;
                 }
                 else if (string.Equals(n, "Unassigned", StringComparison.Ordinal))
@@ -707,15 +707,15 @@ public sealed class EfStore
             if (string.Equals(j.JobName, "Owner", StringComparison.Ordinal)) rankVal = 10;
             else if (string.Equals(j.JobName, "Unassigned", StringComparison.Ordinal)) rankVal = 0;
             else rankVal = j.Rank <= 0 ? 1 : (j.Rank > 9 ? 9 : j.Rank);
-            dict[j.JobName] = new Rights { AddVip = j.AddVip, RemoveVip = j.RemoveVip, ManageUsers = j.ManageUsers, ManageJobs = j.ManageJobs, ManageVenueSettings = j.ManageVenueSettings, EditVipDuration = j.EditVipDuration, AddDj = j.AddDj, RemoveDj = j.RemoveDj, EditShiftPlan = j.EditShiftPlan, Rank = rankVal, ColorHex = j.ColorHex, IconKey = j.IconKey };
+            dict[j.JobName] = new Rights { AddVip = j.AddVip, RemoveVip = j.RemoveVip, EditVipHomeWorld = j.EditVipHomeWorld, ManageUsers = j.ManageUsers, DeleteStaffMember = j.DeleteStaffMember, ManageJobs = j.ManageJobs, ManageVenueSettings = j.ManageVenueSettings, EditVipDuration = j.EditVipDuration, AddDj = j.AddDj, RemoveDj = j.RemoveDj, EditShiftPlan = j.EditShiftPlan, Rank = rankVal, ColorHex = j.ColorHex, IconKey = j.IconKey };
         }
         if (!dict.TryGetValue("Owner", out var own))
         {
-            dict["Owner"] = new Rights { AddVip = true, RemoveVip = true, ManageUsers = true, ManageJobs = true, ManageVenueSettings = true, EditVipDuration = true, AddDj = true, RemoveDj = true, EditShiftPlan = true, Rank = 10, ColorHex = dict.TryGetValue("Owner", out var ex) ? (ex.ColorHex ?? "#FFFFFF") : "#FFFFFF", IconKey = dict.TryGetValue("Owner", out var ex2) ? (ex2.IconKey ?? "User") : "User" };
+            dict["Owner"] = new Rights { AddVip = true, RemoveVip = true, EditVipHomeWorld = true, ManageUsers = true, DeleteStaffMember = true, ManageJobs = true, ManageVenueSettings = true, EditVipDuration = true, AddDj = true, RemoveDj = true, EditShiftPlan = true, Rank = 10, ColorHex = dict.TryGetValue("Owner", out var ex) ? (ex.ColorHex ?? "#FFFFFF") : "#FFFFFF", IconKey = dict.TryGetValue("Owner", out var ex2) ? (ex2.IconKey ?? "User") : "User" };
         }
         else
         {
-            own.AddVip = true; own.RemoveVip = true; own.ManageUsers = true; own.ManageJobs = true; own.ManageVenueSettings = true; own.EditVipDuration = true; own.AddDj = true; own.RemoveDj = true; own.EditShiftPlan = true; own.Rank = 10;
+            own.AddVip = true; own.RemoveVip = true; own.EditVipHomeWorld = true; own.ManageUsers = true; own.DeleteStaffMember = true; own.ManageJobs = true; own.ManageVenueSettings = true; own.EditVipDuration = true; own.AddDj = true; own.RemoveDj = true; own.EditShiftPlan = true; own.Rank = 10;
             dict["Owner"] = own;
         }
         return dict;
@@ -737,7 +737,9 @@ public sealed class EfStore
         var isOwner = string.Equals(name, "Owner", StringComparison.Ordinal);
         j.AddVip = isOwner ? true : rights.AddVip;
         j.RemoveVip = isOwner ? true : rights.RemoveVip;
+        j.EditVipHomeWorld = isOwner ? true : rights.EditVipHomeWorld;
         j.ManageUsers = isOwner ? true : rights.ManageUsers;
+        j.DeleteStaffMember = isOwner ? true : rights.DeleteStaffMember;
         j.ManageJobs = isOwner ? true : rights.ManageJobs;
         j.ManageVenueSettings = isOwner ? true : rights.ManageVenueSettings;
         j.EditVipDuration = isOwner ? true : rights.EditVipDuration;
