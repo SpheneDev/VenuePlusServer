@@ -24,6 +24,21 @@ public static class PublicEndpoints
         return false;
     }
 
+    private static void SplitNameAndHomeWorld(string? input, out string name, out string homeWorld)
+    {
+        name = string.Empty;
+        homeWorld = string.Empty;
+        if (string.IsNullOrWhiteSpace(input)) return;
+        var at = input.LastIndexOf('@');
+        if (at <= 0 || at >= input.Length - 1)
+        {
+            name = input;
+            return;
+        }
+        name = input.Substring(0, at);
+        homeWorld = input.Substring(at + 1);
+    }
+
     private static string GetPrimaryJob(Dictionary<string, Rights> rightsMap, string[] jobs)
     {
         if (HasOwner(jobs)) return "Owner";
@@ -134,7 +149,8 @@ public static class PublicEndpoints
                     var users = list.OrderBy(u => u.Username, StringComparer.Ordinal).Select(u =>
                     {
                         var jobs = EnsureJobs(u.Jobs);
-                        return new { Username = u.Username, Jobs = jobs, Job = GetPrimaryJob(rights, jobs), Role = u.Role, CreatedAt = u.CreatedAt };
+                        SplitNameAndHomeWorld(u.Username, out var n1, out var w1);
+                        return new { Username = n1, Homeworld = w1, Jobs = jobs, CreatedAt = u.CreatedAt };
                     }).ToArray();
                     app.Logger.LogDebug($"Public Staff ok club={clubId} count={users.Length}");
                     return Results.Json(users);
@@ -146,12 +162,12 @@ public static class PublicEndpoints
                     var users = usersClub.Select(u =>
                     {
                         var jobs = EnsureJobs(Store.GetJobsForUser(clubId!, u));
+                        SplitNameAndHomeWorld(u, out var n1, out var w1);
                         return new
                         {
-                            Username = u,
+                            Username = n1,
+                            Homeworld = w1,
                             Jobs = jobs,
-                            Job = GetPrimaryJob(rights, jobs),
-                            Role = (Store.StaffUsers.TryGetValue(u, out var info) ? info.Role : "power"),
                             CreatedAt = (Store.StaffUsers.TryGetValue(u, out var info2) ? info2.CreatedAt : DateTimeOffset.UtcNow)
                         };
                     }).ToArray();
@@ -204,6 +220,128 @@ public static class PublicEndpoints
             catch (Exception ex)
             {
                 app.Logger.LogDebug($"Public DJ error ak={accessKey}: {ex.Message}");
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            }
+        }).RequireCors("PublicJson");
+
+        app.MapGet("/{accessKey}/staffshifts.json", async (string accessKey, HttpContext ctx) =>
+        {
+            app.Logger.LogDebug($"Public Staff Shifts GET ip={ctx.Connection.RemoteIpAddress} ak={accessKey}");
+            try
+            {
+                if (string.IsNullOrWhiteSpace(accessKey)) { app.Logger.LogDebug("Public Staff Shifts missing accessKey"); return Results.Json(Array.Empty<ShiftEntry>()); }
+                string? clubId = null;
+                if (!string.IsNullOrWhiteSpace(conn))
+                {
+                    using var scope = app.Services.CreateScope();
+                    var ef = scope.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                    clubId = await ef.GetClubIdByAccessKeyAsync(accessKey);
+                }
+                else
+                {
+                    clubId = Store.ClubAccessKeysByKey.TryGetValue(accessKey, out var c) ? c : null;
+                }
+                if (string.IsNullOrWhiteSpace(clubId)) { app.Logger.LogDebug("Public Staff Shifts no club for accessKey"); return Results.Json(Array.Empty<ShiftEntry>()); }
+                if (!string.IsNullOrWhiteSpace(conn))
+                {
+                    using var scope2 = app.Services.CreateScope();
+                    var ef2 = scope2.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                    var list = await ef2.LoadShiftEntriesAsync(clubId!) ?? Array.Empty<ShiftEntry>();
+                    var staff = await ef2.GetStaffUsersAsync(clubId!) ?? Array.Empty<StaffUserInfo>();
+                    var nameByUid = staff.ToDictionary(s => s.Uid, s => s.Username, StringComparer.Ordinal);
+                    var res = list.Where(e => !string.IsNullOrWhiteSpace(e.AssignedUid)).OrderBy(e => e.StartAt).Select(e =>
+                    {
+                        var uname = string.Empty;
+                        if (!string.IsNullOrWhiteSpace(e.AssignedUid) && nameByUid.TryGetValue(e.AssignedUid, out var n)) uname = n;
+                        SplitNameAndHomeWorld(uname, out var n1, out var w1);
+                        return new { Title = e.Title, StaffName = n1, StaffHomeWorld = w1, Job = e.Job, StartAt = e.StartAt, EndAt = e.EndAt };
+                    }).ToArray();
+                    app.Logger.LogDebug($"Public Staff Shifts ok club={clubId} count={res.Length}");
+                    return Results.Json(res);
+                }
+                else
+                {
+                    var keys = Store.ShiftEntries.Keys.Where(k => k.StartsWith(clubId + "|", StringComparison.Ordinal)).ToArray();
+                    var list = keys.Select(k => Store.ShiftEntries.TryGetValue(k, out var e) ? e : null).Where(e => e != null && !string.IsNullOrWhiteSpace(e!.AssignedUid)).Select(e => e!).OrderBy(e => e.StartAt).Select(e =>
+                    {
+                        var uname = string.Empty;
+                        if (!string.IsNullOrWhiteSpace(e.AssignedUid))
+                        {
+                            foreach (var kv in Store.StaffUsers)
+                            {
+                                if (kv.Value != null && string.Equals(kv.Value.Uid, e.AssignedUid, StringComparison.Ordinal))
+                                {
+                                    uname = kv.Key;
+                                    break;
+                                }
+                            }
+                        }
+                        SplitNameAndHomeWorld(uname, out var n1, out var w1);
+                        return new { Title = e.Title, StaffName = n1, StaffHomeWorld = w1, Job = e.Job, StartAt = e.StartAt, EndAt = e.EndAt };
+                    }).ToArray();
+                    app.Logger.LogDebug($"Public Staff Shifts ok mem club={clubId} count={list.Length}");
+                    return Results.Json(list);
+                }
+            }
+            catch (Exception ex)
+            {
+                app.Logger.LogDebug($"Public Staff Shifts error ak={accessKey}: {ex.Message}");
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            }
+        }).RequireCors("PublicJson");
+
+        app.MapGet("/{accessKey}/djshifts.json", async (string accessKey, HttpContext ctx) =>
+        {
+            app.Logger.LogDebug($"Public DJ Shifts GET ip={ctx.Connection.RemoteIpAddress} ak={accessKey}");
+            try
+            {
+                if (string.IsNullOrWhiteSpace(accessKey)) { app.Logger.LogDebug("Public DJ Shifts missing accessKey"); return Results.Json(Array.Empty<ShiftEntry>()); }
+                string? clubId = null;
+                if (!string.IsNullOrWhiteSpace(conn))
+                {
+                    using var scope = app.Services.CreateScope();
+                    var ef = scope.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                    clubId = await ef.GetClubIdByAccessKeyAsync(accessKey);
+                }
+                else
+                {
+                    clubId = Store.ClubAccessKeysByKey.TryGetValue(accessKey, out var c) ? c : null;
+                }
+                if (string.IsNullOrWhiteSpace(clubId)) { app.Logger.LogDebug("Public DJ Shifts no club for accessKey"); return Results.Json(Array.Empty<ShiftEntry>()); }
+                if (!string.IsNullOrWhiteSpace(conn))
+                {
+                    using var scope2 = app.Services.CreateScope();
+                    var ef2 = scope2.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                    var list = await ef2.LoadShiftEntriesAsync(clubId!) ?? Array.Empty<ShiftEntry>();
+                    var djs = await ef2.LoadDjEntriesAsync(clubId!) ?? Array.Empty<DjEntry>();
+                    var twitchByDj = djs.ToDictionary(d => d.DjName, d => d.TwitchLink, StringComparer.Ordinal);
+                    var res = list.Where(e => !string.IsNullOrWhiteSpace(e.DjName)).OrderBy(e => e.StartAt).Select(e =>
+                    {
+                        var djName = e.DjName ?? string.Empty;
+                        var link = twitchByDj.TryGetValue(djName, out var l) ? l : string.Empty;
+                        return new { Title = e.Title, DjName = djName, TwitchLink = link, StartAt = e.StartAt, EndAt = e.EndAt };
+                    }).ToArray();
+                    app.Logger.LogDebug($"Public DJ Shifts ok club={clubId} count={res.Length}");
+                    return Results.Json(res);
+                }
+                else
+                {
+                    var keys = Store.ShiftEntries.Keys.Where(k => k.StartsWith(clubId + "|", StringComparison.Ordinal)).ToArray();
+                    var djKeys = Store.DjEntries.Keys.Where(k => k.StartsWith(clubId + "|", StringComparison.Ordinal)).ToArray();
+                    var twitchByDj = djKeys.Select(k => Store.DjEntries.TryGetValue(k, out var e) ? e : null).Where(e => e != null).Select(e => e!).ToDictionary(e => e.DjName, e => e.TwitchLink, StringComparer.Ordinal);
+                    var list = keys.Select(k => Store.ShiftEntries.TryGetValue(k, out var e) ? e : null).Where(e => e != null && !string.IsNullOrWhiteSpace(e!.DjName)).Select(e => e!).OrderBy(e => e.StartAt).Select(e =>
+                    {
+                        var djName = e.DjName ?? string.Empty;
+                        var link = twitchByDj.TryGetValue(djName, out var l) ? l : string.Empty;
+                        return new { Title = e.Title, DjName = djName, TwitchLink = link, StartAt = e.StartAt, EndAt = e.EndAt };
+                    }).ToArray();
+                    app.Logger.LogDebug($"Public DJ Shifts ok mem club={clubId} count={list.Length}");
+                    return Results.Json(list);
+                }
+            }
+            catch (Exception ex)
+            {
+                app.Logger.LogDebug($"Public DJ Shifts error ak={accessKey}: {ex.Message}");
                 return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
             }
         }).RequireCors("PublicJson");

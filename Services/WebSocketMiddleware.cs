@@ -393,6 +393,25 @@ public static class WebSocketMiddleware
                         }
                         continue;
                     }
+                    if (type == "vip.snapshot.request")
+                    {
+                        var clubReq = WebSocketStore.TryGetClub(id, out var curClubReq) && !string.IsNullOrWhiteSpace(curClubReq) ? curClubReq! : "default";
+                        if (!string.IsNullOrWhiteSpace(conn))
+                        {
+                            using var scopeEfReq = app.Services.CreateScope();
+                            var efSvcReq = scopeEfReq.ServiceProvider.GetRequiredService<VenuePlus.Server.Services.EfStore>();
+                            var entriesReq = await efSvcReq.LoadVipEntriesAsync(clubReq) ?? Array.Empty<VipEntry>();
+                            await WebSocketStore.SendAsync(ws, new { type = "vip.snapshot", entries = entriesReq.OrderBy(e => e.CharacterName, StringComparer.Ordinal).ToArray() });
+                        }
+                        else
+                        {
+                            string[] keysReq;
+                            if (Store.ClubVipKeys.TryGetValue(clubReq, out var sReq)) keysReq = sReq.Keys.ToArray(); else keysReq = Array.Empty<string>();
+                            var listReq = keysReq.Select(k => Store.VipEntries.TryGetValue(k, out var e) ? e : null).Where(e => e != null).Select(e => e!).OrderBy(e => e.CharacterName, StringComparer.Ordinal).ToArray();
+                            await WebSocketStore.SendAsync(ws, new { type = "vip.snapshot", entries = listReq });
+                        }
+                        continue;
+                    }
                     if (type == "login.request")
                     {
                         var username = root.TryGetProperty("username", out var u) ? (u.GetString() ?? string.Empty) : string.Empty;
