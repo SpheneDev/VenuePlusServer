@@ -128,6 +128,7 @@ public sealed class EfStore
             return list.Select(e => new ShiftEntry
             {
                 Id = e.Id,
+                EventId = e.EventId,
                 Title = e.Title,
                 DjName = e.DjName,
                 AssignedUid = e.AssignedUid,
@@ -236,6 +237,7 @@ public sealed class EfStore
                 {
                     Id = newId,
                     ClubId = clubId,
+                    EventId = entry.EventId,
                     Title = entry.Title ?? string.Empty,
                     DjName = string.IsNullOrWhiteSpace(entry.DjName) ? null : entry.DjName,
                     AssignedUid = string.IsNullOrWhiteSpace(entry.AssignedUid) ? null : entry.AssignedUid,
@@ -252,6 +254,7 @@ public sealed class EfStore
                 e.DjName = string.IsNullOrWhiteSpace(entry.DjName) ? null : entry.DjName;
                 e.AssignedUid = string.IsNullOrWhiteSpace(entry.AssignedUid) ? null : entry.AssignedUid;
                 e.Job = string.IsNullOrWhiteSpace(entry.Job) ? null : entry.Job;
+                e.EventId = entry.EventId;
                 e.StartAt = entry.StartAt;
                 e.EndAt = entry.EndAt;
                 _db.Shifts.Update(e);
@@ -260,6 +263,74 @@ public sealed class EfStore
             return entry;
         }
         catch { return entry; }
+    }
+
+    public async Task<EventEntry[]> LoadEventEntriesAsync(string clubId)
+    {
+        try
+        {
+            var list = await _db.Events.Where(e => e.ClubId == clubId).OrderBy(e => e.StartAt).ToListAsync();
+            return list.Select(e => new EventEntry
+            {
+                Id = e.Id,
+                ClubId = e.ClubId,
+                Title = e.Title,
+                StartAt = e.StartAt,
+                EndAt = e.EndAt
+            }).ToArray();
+        }
+        catch
+        {
+            return Array.Empty<EventEntry>();
+        }
+    }
+
+    public async Task<EventEntry> PersistAddOrUpdateEventAsync(string clubId, EventEntry entry)
+    {
+        try
+        {
+            var exists = await _db.Events.AnyAsync(s => s.ClubId == clubId && s.Id == entry.Id);
+            if (!exists)
+            {
+                var newId = entry.Id == Guid.Empty ? Guid.NewGuid() : entry.Id;
+                _db.Events.Add(new EventEntryEntity
+                {
+                    Id = newId,
+                    ClubId = clubId,
+                    Title = entry.Title ?? string.Empty,
+                    StartAt = entry.StartAt,
+                    EndAt = entry.EndAt
+                });
+                entry.Id = newId;
+                entry.ClubId = clubId;
+            }
+            else
+            {
+                var e = await _db.Events.FirstAsync(s => s.ClubId == clubId && s.Id == entry.Id);
+                e.Title = entry.Title ?? string.Empty;
+                e.StartAt = entry.StartAt;
+                e.EndAt = entry.EndAt;
+                _db.Events.Update(e);
+                entry.ClubId = clubId;
+            }
+            await _db.SaveChangesAsync();
+            return entry;
+        }
+        catch { return entry; }
+    }
+
+    public async Task PersistRemoveEventAsync(string clubId, Guid id)
+    {
+        try
+        {
+            var e = await _db.Events.FirstOrDefaultAsync(s => s.ClubId == clubId && s.Id == id);
+            if (e != null)
+            {
+                _db.Events.Remove(e);
+                await _db.SaveChangesAsync();
+            }
+        }
+        catch { }
     }
 
     public async Task PersistRemoveShiftAsync(string clubId, Guid id)

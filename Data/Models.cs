@@ -24,12 +24,22 @@ public sealed class DjEntry
 public sealed class ShiftEntry
 {
     public Guid Id { get; set; }
+    public Guid? EventId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? DjName { get; set; }
     public string? AssignedUid { get; set; }
     public string? Job { get; set; }
     public DateTimeOffset StartAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset EndAt { get; set; } = DateTimeOffset.UtcNow.AddHours(2);
+}
+
+public sealed class EventEntry
+{
+    public Guid Id { get; set; }
+    public string ClubId { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public DateTimeOffset StartAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset EndAt { get; set; } = DateTimeOffset.UtcNow.AddHours(4);
 }
 
 public sealed class StaffUser
@@ -87,6 +97,7 @@ public sealed class ServerState
 {
     public VipEntry[] VipEntries { get; set; } = Array.Empty<VipEntry>();
     public StaffUserInfo[] StaffUsers { get; set; } = Array.Empty<StaffUserInfo>();
+    public EventEntry[] EventEntries { get; set; } = Array.Empty<EventEntry>();
     public System.Collections.Generic.Dictionary<string, Rights> JobRights { get; set; } = new System.Collections.Generic.Dictionary<string, Rights>(System.StringComparer.Ordinal);
     public System.Collections.Generic.Dictionary<string, string[]> ClubUserJobs { get; set; } = new System.Collections.Generic.Dictionary<string, string[]>(System.StringComparer.Ordinal);
     public System.Collections.Generic.Dictionary<string, string> ClubAccessKeysByClub { get; set; } = new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal);

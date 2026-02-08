@@ -14,6 +14,7 @@ public sealed class VenuePlusDbContext : DbContext
     public DbSet<BaseUserEntity> BaseUsers => Set<BaseUserEntity>();
     public DbSet<DjEntryEntity> DjEntries => Set<DjEntryEntity>();
     public DbSet<ShiftEntryEntity> Shifts => Set<ShiftEntryEntity>();
+    public DbSet<EventEntryEntity> Events => Set<EventEntryEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -26,5 +27,6 @@ public sealed class VenuePlusDbContext : DbContext
         modelBuilder.Entity<BaseUserEntity>().HasIndex(e => e.Username).IsUnique();
         modelBuilder.Entity<DjEntryEntity>().HasIndex(e => new { e.ClubId, e.DjName }).IsUnique();
         modelBuilder.Entity<ShiftEntryEntity>().HasIndex(e => new { e.ClubId, e.Id }).IsUnique();
+        modelBuilder.Entity<EventEntryEntity>().HasIndex(e => new { e.ClubId, e.Id }).IsUnique();
     }
 }

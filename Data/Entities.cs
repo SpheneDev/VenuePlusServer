@@ -144,6 +144,7 @@ public sealed class ShiftEntryEntity
     [Required]
     [MaxLength(64)]
     public string ClubId { get; set; } = string.Empty;
+    public Guid? EventId { get; set; }
     [Required]
     [MaxLength(128)]
     public string Title { get; set; } = string.Empty;
@@ -155,4 +156,18 @@ public sealed class ShiftEntryEntity
     public string? Job { get; set; }
     public DateTimeOffset StartAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset EndAt { get; set; } = DateTimeOffset.UtcNow.AddHours(2);
+}
+
+public sealed class EventEntryEntity
+{
+    [Key]
+    public Guid Id { get; set; }
+    [Required]
+    [MaxLength(64)]
+    public string ClubId { get; set; } = string.Empty;
+    [Required]
+    [MaxLength(128)]
+    public string Title { get; set; } = string.Empty;
+    public DateTimeOffset StartAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset EndAt { get; set; } = DateTimeOffset.UtcNow.AddHours(4);
 }

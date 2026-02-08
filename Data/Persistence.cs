@@ -22,6 +22,15 @@ public static class Persistence
             Store.MaintenanceModePendingEnable = state.MaintenanceModePendingEnable;
             Store.VipEntries.Clear();
             foreach (var e in state.VipEntries) Store.VipEntries[e.Key] = e;
+            Store.EventEntries.Clear();
+            foreach (var e in state.EventEntries)
+            {
+                var clubId = string.IsNullOrWhiteSpace(e.ClubId) ? "default" : e.ClubId;
+                var key = clubId + "|" + (e.Id == Guid.Empty ? Guid.NewGuid() : e.Id);
+                if (e.Id == Guid.Empty) e.Id = Guid.Parse(key.Substring(clubId.Length + 1));
+                e.ClubId = clubId;
+                Store.EventEntries[key] = e;
+            }
             Store.StaffUsers.Clear();
             foreach (var u in state.StaffUsers) Store.StaffUsers[u.Username] = u;
             Store.JobRights.Clear();
@@ -146,6 +155,7 @@ public static class Persistence
             {
                 VipEntries = Store.VipEntries.Values.OrderBy(e => e.CharacterName, StringComparer.Ordinal).ToArray(),
                 StaffUsers = Store.StaffUsers.Values.OrderBy(u => u.Username, StringComparer.Ordinal).ToArray(),
+                EventEntries = Store.EventEntries.Values.OrderBy(e => e.StartAt).ToArray(),
                 JobRights = Store.JobRights.ToDictionary(kv => kv.Key, kv => kv.Value),
                 ClubUserJobs = clubUserJobs,
                 ClubAccessKeysByClub = Store.ClubAccessKeysByClub.ToDictionary(kv => kv.Key, kv => kv.Value),
