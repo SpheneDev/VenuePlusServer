@@ -644,6 +644,11 @@ public static class WebSocketMiddleware
                             await WebSocketStore.SendAsync(ws, new { type = "jobs.rights.fail" });
                             continue;
                         }
+                        if (string.Equals(name, "Unassigned", StringComparison.Ordinal))
+                        {
+                            await WebSocketStore.SendAsync(ws, new { type = "jobs.rights.fail" });
+                            continue;
+                        }
                         var rights = JsonSerializer.Deserialize<Rights>(rightsEl.GetRawText(), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }) ?? new Rights();
                         var clubIdCur = (WebSocketStore.TryGetClub(id, out var cc2) && !string.IsNullOrWhiteSpace(cc2)) ? cc2! : "default";
                         if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = "jobs.rights.fail" }); continue; }
@@ -1328,7 +1333,7 @@ public static class WebSocketMiddleware
                         var clubIdCur = (WebSocketStore.TryGetClub(id, out var cc) && !string.IsNullOrWhiteSpace(cc)) ? cc! : "default";
                         if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(name)) { await WebSocketStore.SendAsync(ws, new { type = type == "job.add" ? "job.add.fail" : "job.delete.fail" }); continue; }
                         if (!Util.ValidateSession(token, out var username)) { await WebSocketStore.SendAsync(ws, new { type = type == "job.add" ? "job.add.fail" : "job.delete.fail" }); continue; }
-                        if (string.Equals(name, "Owner", StringComparison.Ordinal)) { await WebSocketStore.SendAsync(ws, new { type = type == "job.add" ? "job.add.fail" : "job.delete.fail" }); continue; }
+                        if (string.Equals(name, "Owner", StringComparison.Ordinal) || string.Equals(name, "Unassigned", StringComparison.Ordinal)) { await WebSocketStore.SendAsync(ws, new { type = type == "job.add" ? "job.add.fail" : "job.delete.fail" }); continue; }
                         bool isOwner;
                         bool canManageJobs;
                         if (!string.IsNullOrWhiteSpace(conn))
@@ -2384,6 +2389,7 @@ public static class WebSocketMiddleware
                         var tokenReg = root.TryGetProperty("token", out var tok) ? (tok.GetString() ?? string.Empty) : string.Empty;
                         var creatorUsername = (!string.IsNullOrWhiteSpace(tokenReg) && Util.ValidateSession(tokenReg, out var unameReg)) ? unameReg : (root.TryGetProperty("creatorUsername", out var cu) ? (cu.GetString() ?? string.Empty) : string.Empty);
                         if (string.IsNullOrWhiteSpace(clubIdReg)) { await WebSocketStore.SendAsync(ws, new { type = "club.register.fail", code = 400 }); app.Logger.LogDebug("WS club.register.fail reason=missing clubId"); continue; }
+                        string creatorUidForLog = creatorUsername;
                         if (!string.IsNullOrWhiteSpace(conn))
                         {
                             using var scopeEf = app.Services.CreateScope();
@@ -2398,6 +2404,8 @@ public static class WebSocketMiddleware
                                 await efSvc.CreateStaffUserAsync(clubIdReg, creatorUsername!, hashToUse);
                                 await efSvc.UpdateStaffUserJobsAsync(clubIdReg, creatorUsername!, new[] { "Owner" });
                                 await efSvc.AddClubIfMissingAsync(clubIdReg, creatorUsername!);
+                                var info = await efSvc.GetStaffUserByUsernameAsync(creatorUsername);
+                                if (!string.IsNullOrWhiteSpace(info?.Uid)) creatorUidForLog = info!.Uid;
                                 var accessKey = await efSvc.GetAccessKeyAsync(clubIdReg) ?? Util.NewUid(24);
                                 Store.ClubAccessKeysByClub[clubIdReg] = accessKey; Store.ClubAccessKeysByKey[accessKey] = clubIdReg;
                                 var list = await efSvc.GetStaffUsersAsync(clubIdReg) ?? Array.Empty<StaffUserInfo>();
@@ -2423,11 +2431,13 @@ public static class WebSocketMiddleware
                                 var accessKey = Util.NewUid(24);
                                 Store.ClubAccessKeysByClub[clubIdReg] = accessKey; Store.ClubAccessKeysByKey[accessKey] = clubIdReg;
                                 await WebSocketStore.BroadcastToClubAsync(clubIdReg, new { type = "user.update", username = creatorUsername, jobs = new[] { "Owner" }, job = "Owner" });
+                                if (Store.StaffUsers.TryGetValue(creatorUsername, out var info) && !string.IsNullOrWhiteSpace(info.Uid)) creatorUidForLog = info.Uid;
                             }
                         }
                         await WebSocketStore.BroadcastAsync(new { type = "jobs.list", jobs = Store.JobRights.Keys.OrderBy(j => j, StringComparer.Ordinal).ToArray() });
                         await WebSocketStore.SendAsync(ws, new { type = "club.register.ok" });
-                        app.Logger.LogDebug($"WS club.register.ok club={clubIdReg} creator={creatorUsername}");
+                        var loggedIn = WebSocketStore.GetClubSessionCount(clubIdReg);
+                        app.Logger.LogInformation($"Venue created club={clubIdReg} creator={creatorUidForLog} loggedIn={loggedIn}");
                         continue;
                     }
                     if (type == "club.delete")
@@ -2505,6 +2515,8 @@ public static class WebSocketMiddleware
                             app.Logger.LogDebug($"WS club.delete.ok club={clubIdDel} mem");
                         }
                         await WebSocketStore.SendAsync(ws, new { type = "club.delete.ok" });
+                        var loggedIn = WebSocketStore.GetTotalSessionCount();
+                        app.Logger.LogInformation($"Venue deleted club={clubIdDel} loggedIn={loggedIn}");
                         continue;
                     }
                     if (type == "club.join")

@@ -70,11 +70,15 @@ public static class PublicEndpoints
                     var db = scopeH.ServiceProvider.GetRequiredService<VenuePlus.Server.Data.VenuePlusDbContext>();
                     dbOk = await db.Database.CanConnectAsync();
                 }
+                if (!dbOk)
+                {
+                    app.Logger.LogWarning("Health check: database not reachable");
+                }
                 return Results.Ok(new { ok = true, dbOk, maintenanceMode = Store.MaintenanceMode, time = DateTimeOffset.UtcNow });
             }
             catch (Exception ex)
             {
-                app.Logger.LogDebug($"Health db error: {ex.Message}");
+                app.Logger.LogWarning($"Health db error: {ex.Message}");
                 return Results.Ok(new { ok = true, dbOk = false, maintenanceMode = Store.MaintenanceMode, time = DateTimeOffset.UtcNow });
             }
         }).RequireCors("PublicJson");

@@ -106,8 +106,45 @@ public class Program
             foreach (var e in vip) { Store.VipEntries[e.Key] = e; setVipDefault[e.Key] = 1; }
         }
 
+        app.Lifetime.ApplicationStarted.Register(() =>
+        {
+            var sb = new StringBuilder();
+            sb.Append("Server started");
+            if (app.Urls.Count > 0)
+            {
+                sb.Append(" urls=");
+                var first = true;
+                foreach (var url in app.Urls)
+                {
+                    if (!first) sb.Append(", ");
+                    first = false;
+                    sb.Append(url);
+                }
+            }
+            sb.Append(" db=").Append(string.IsNullOrWhiteSpace(conn) ? "memory" : "postgres");
+            app.Logger.LogInformation(sb.ToString());
+        });
         PublicEndpoints.Map(app, conn);
         WebSocketMiddleware.Use(app, conn);
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            var stopping = app.Lifetime.ApplicationStopping;
+            while (!stopping.IsCancellationRequested)
+            {
+                try
+                {
+                    var totalSessions = WebSocketStore.GetTotalSessionCount();
+                    var msg = new StringBuilder();
+                    msg.Append("Server metrics: loggedIn=").Append(totalSessions);
+                    app.Logger.LogInformation(msg.ToString());
+                }
+                catch (Exception ex)
+                {
+                    app.Logger.LogWarning($"Metrics loop error: {ex.Message}");
+                }
+                try { await System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(30), stopping); } catch { }
+            }
+        });
         await app.RunAsync();
     }
 

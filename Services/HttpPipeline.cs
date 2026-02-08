@@ -24,9 +24,12 @@ public static class HttpPipeline
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole();
         builder.Logging.SetMinimumLevel(LogLevel.Information);
-        builder.Logging.AddFilter("Microsoft", LogLevel.Information);
-        builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Information);
-        builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.Information);
+        builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
+        builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+        builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting", LogLevel.Warning);
+        builder.Logging.AddFilter("Microsoft.AspNetCore.Routing", LogLevel.Warning);
+        builder.Logging.AddFilter("Microsoft.AspNetCore.Http", LogLevel.Warning);
+        builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.Warning);
         builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Error);
         builder.Services.AddRouting();
         builder.Services.Configure<JsonOptions>(opts => { opts.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase; });
@@ -48,15 +51,19 @@ public static class HttpPipeline
         });
         app.Use(async (ctx, next) =>
         {
+            var path = ctx.Request.Path.Value ?? string.Empty;
+            var isHealth = string.Equals(path, "/health", StringComparison.OrdinalIgnoreCase);
             try
             {
-                app.Logger.LogDebug($"HTTP {ctx.Request.Method} {ctx.Request.Path}");
                 await next();
-                app.Logger.LogDebug($"HTTP done {ctx.Response.StatusCode} {ctx.Request.Path}");
+                if (!isHealth)
+                {
+                    app.Logger.LogInformation($"HTTP {ctx.Request.Method} {ctx.Request.Path} -> {ctx.Response.StatusCode}");
+                }
             }
             catch (Exception ex)
             {
-                app.Logger.LogDebug($"HTTP error {ctx.Request.Path}: {ex.Message}");
+                app.Logger.LogWarning($"HTTP error {ctx.Request.Path}: {ex.Message}");
                 throw;
             }
         });

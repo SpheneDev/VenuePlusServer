@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.WebSockets;
 using System.Text;
@@ -135,5 +136,43 @@ public static class WebSocketStore
     {
         if (!SocketSessions.TryGetValue(id, out var set)) return Array.Empty<string>();
         return set.Keys.ToArray();
+    }
+
+    public static int GetTotalSessionCount()
+    {
+        var total = 0;
+        foreach (var kv in SocketSessions.ToArray())
+        {
+            total += kv.Value.Count;
+        }
+        return total;
+    }
+
+    public static int GetClubSessionCount(string clubId)
+    {
+        if (string.IsNullOrWhiteSpace(clubId)) return 0;
+        var count = 0;
+        foreach (var kv in SocketClubs.ToArray())
+        {
+            if (!string.Equals(kv.Value, clubId, StringComparison.Ordinal)) continue;
+            if (SocketSessions.TryGetValue(kv.Key, out var set)) count += set.Count;
+        }
+        return count;
+    }
+
+    public static Dictionary<string, int> GetClubSessionCounts()
+    {
+        var res = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var kv in SocketClubs.ToArray())
+        {
+            var club = kv.Value;
+            if (string.IsNullOrWhiteSpace(club)) continue;
+            if (!SocketSessions.TryGetValue(kv.Key, out var set)) continue;
+            var add = set.Count;
+            if (add <= 0) continue;
+            if (res.TryGetValue(club, out var cur)) res[club] = cur + add;
+            else res[club] = add;
+        }
+        return res;
     }
 }
